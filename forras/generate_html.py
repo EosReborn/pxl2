@@ -20,13 +20,17 @@ DAILY_CODES = {
     "B":  {"label": "Betegszabadság", "color": "#ff6b6b"},
     "OH": {"label": "Home office", "color": "#9dc3e6"},
     "UN": {"label": "Ünnepnap", "color": "#c39bd3"},
+    "P":  {"label": "Pihenőnap", "color": "#a9d18e"},
 }
+SUMMARY_CODES = ["Szabadság", "Betegszabadság", "Home office", "Ünnepnap", "Pihenőnap"]
+SHIFT_CYCLE = ["Éjjel", "Délután", "Délelőtt"]
 SHIFT_COLORS = {
     "Éjjel": "#5b4b8a",
     "Délután": "#f4b183",
     "Délelőtt": "#ffe699",
     "Szabadság": "#ffc000",
     "Home office": "#9dc3e6",
+    "Pihenő": "#70ad47",
     "Egyéb": "#d9d9d9",
 }
 
@@ -82,6 +86,46 @@ while ws2.cell(row=r, column=1).value:
     weekly[name] = row_vals
     r += 1
 
+# --- kivétel lista: mindenhol, ahol a tényleges heti bejegyzés eltér az elvárt rotációtól ---
+# (ugyanaz a rotációs logika, mint a build_xlsx.py-ban: TODAY hete = Éjjel)
+TODAY = datetime.date(2026, 7, 13)
+today_monday = TODAY - datetime.timedelta(days=TODAY.weekday())
+
+exceptions = []
+for name in all_employees:
+    vals = weekly.get(name, [])
+    for i, label in enumerate(week_labels):
+        y, mo, da = [int(x) for x in str(label).split(".")]
+        wk = datetime.date(y, mo, da)
+        offset = (wk - today_monday).days // 7
+        expected = SHIFT_CYCLE[offset % 3]
+        actual = vals[i] if i < len(vals) else ""
+        if actual and actual != expected:
+            exceptions.append({
+                "employee": name,
+                "week": f"{y}.{mo}.{da}",
+                "year": y,
+                "expected": expected,
+                "actual": actual,
+            })
+
+# --- éves összesítő beolvasása (a "Éves összesítő" lapról, COUNTIF formulák eredménye) ---
+ws3 = wb["Éves összesítő"]
+max_col3 = ws3.max_column
+summary_headers = [ws3.cell(row=1, column=c).value for c in range(2, max_col3 + 1)]
+summary = {}
+r = 2
+while ws3.cell(row=r, column=1).value:
+    name = ws3.cell(row=r, column=1).value
+    row_by_year = {}
+    for idx, header in enumerate(summary_headers):
+        y_str, label = str(header).split(" ", 1)
+        y = int(y_str)
+        v = ws3.cell(row=r, column=idx + 2).value or 0
+        row_by_year.setdefault(y, {})[label] = v
+    summary[name] = row_by_year
+    r += 1
+
 data = {
     "generated": datetime.datetime.now().strftime("%Y.%m.%d %H:%M"),
     "years": years,
@@ -92,6 +136,9 @@ data = {
     "weekly": weekly,
     "codes": DAILY_CODES,
     "shift_colors": SHIFT_COLORS,
+    "exceptions": exceptions,
+    "summary": summary,
+    "summary_codes": SUMMARY_CODES,
 }
 
 HTML_TEMPLATE = """<!DOCTYPE html>
@@ -162,6 +209,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     background: white; cursor: pointer; font-size: 14px; font-weight: 600; color: var(--muted);
   }
   .year-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
+  .summary-cards { display: flex; flex-wrap: wrap; gap: 12px; }
+  .summary-card {
+    flex: 1 1 180px; border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px;
+  }
+  .summary-card h3 { margin: 0 0 10px 0; font-size: 14px; }
+  .summary-card table { width: 100%; font-size: 13px; }
+  .summary-card td { border: none; padding: 2px 0; text-align: left; }
+  .summary-card td.num { text-align: right; font-weight: 600; }
+  .empty-note { color: var(--muted); font-size: 13px; padding: 12px 0; }
 </style>
 </head>
 <body>
@@ -173,6 +229,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   <div class="tabs">
     <button class="tab-btn active" data-tab="daily">Napi jelenlét</button>
     <button class="tab-btn" data-tab="weekly">Heti beosztás (műszakrend)</button>
+    <button class="tab-btn" data-tab="exceptions">Kivételek</button>
+    <button class="tab-btn" data-tab="summary">Éves összesítő</button>
   </div>
 
   <div id="daily" class="panel active">
@@ -193,6 +251,19 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     </div>
     <div class="table-scroll"><table id="weeklyTable"></table></div>
     <div class="legend" id="legendWeekly"></div>
+  </div>
+
+  <div id="exceptions" class="panel">
+    <div class="controls">
+      <label>Keresés:</label>
+      <input type="text" id="searchExc" placeholder="Munkatárs neve...">
+    </div>
+    <p class="empty-note">Azok a hetek, ahol a tényleges beosztás eltér az automatikus Éjjel→Délután→Délelőtt rotációtól (pl. szabadság, pihenő, home office, egyéb).</p>
+    <div class="table-scroll"><table id="excTable"></table></div>
+  </div>
+
+  <div id="summary" class="panel">
+    <div class="summary-cards" id="summaryCards"></div>
   </div>
 
   <div class="year-bar" id="yearBar"></div>
@@ -224,6 +295,8 @@ DATA.years.forEach(y => {
     document.querySelectorAll('.year-btn').forEach(b => b.classList.toggle('active', parseInt(b.dataset.year) === y));
     renderDaily();
     renderWeekly();
+    renderExceptions();
+    renderSummary();
   });
   yearBar.appendChild(btn);
 });
@@ -283,8 +356,9 @@ function renderDaily() {
     html += `<tr><td class="name-col">${name}</td>`;
     colIndexes.forEach(i => {
       const code = (yearData.daily[name] && yearData.daily[name][i]) || '';
-      const cls = code ? `code-${code}` : '';
-      html += `<td class="${cls}" title="${DATA.codes[code] ? DATA.codes[code].label : ''}">${code}</td>`;
+      const info = DATA.codes[code];
+      const style = (info && code) ? `style="background:${info.color}${code==='B'?';color:white':''}"` : '';
+      html += `<td ${style} title="${info ? info.label : ''}">${code}</td>`;
     });
     html += '</tr>';
   });
@@ -319,12 +393,48 @@ function renderWeekly() {
   document.getElementById('weeklyTable').innerHTML = html;
 }
 
+function renderExceptions() {
+  const search = document.getElementById('searchExc').value.trim().toLowerCase();
+  const rows = DATA.exceptions.filter(e => e.year === currentYear && (!search || e.employee.toLowerCase().includes(search)));
+  let html = '<thead><tr><th class="name-col">Munkatárs</th><th>Hét</th><th>Elvárt (rotáció)</th><th>Tényleges</th></tr></thead><tbody>';
+  if (rows.length === 0) {
+    html += '<tr><td colspan="4" style="text-align:center;color:#6b7280;">Nincs kivétel ebben az évben.</td></tr>';
+  }
+  rows.forEach(e => {
+    const parts = e.week.split('.');
+    const color = DATA.shift_colors[e.actual];
+    const style = color ? `style="background:${color}${e.actual === 'Éjjel' ? ';color:white' : ''}"` : '';
+    html += `<tr><td class="name-col">${e.employee}</td><td>${parts[1]}.${parts[2]}</td><td>${e.expected}</td><td ${style}>${e.actual}</td></tr>`;
+  });
+  html += '</tbody>';
+  document.getElementById('excTable').innerHTML = html;
+}
+
+function renderSummary() {
+  const container = document.getElementById('summaryCards');
+  container.innerHTML = '';
+  DATA.employees.forEach(name => {
+    const yearData = (DATA.summary[name] || {})[currentYear] || {};
+    const card = document.createElement('div');
+    card.className = 'summary-card';
+    let rowsHtml = '';
+    DATA.summary_codes.forEach(code => {
+      rowsHtml += `<tr><td>${code}</td><td class="num">${yearData[code] ?? 0}</td></tr>`;
+    });
+    card.innerHTML = `<h3>${name}</h3><table>${rowsHtml}</table>`;
+    container.appendChild(card);
+  });
+}
+
 monthSelect.addEventListener('change', renderDaily);
 document.getElementById('searchDaily').addEventListener('input', renderDaily);
 document.getElementById('searchWeekly').addEventListener('input', renderWeekly);
+document.getElementById('searchExc').addEventListener('input', renderExceptions);
 
 renderDaily();
 renderWeekly();
+renderExceptions();
+renderSummary();
 </script>
 </body>
 </html>

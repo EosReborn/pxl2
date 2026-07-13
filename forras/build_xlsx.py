@@ -27,14 +27,19 @@ DAILY_CODES = {
     "B":  ("Betegszabadság", "FF6B6B"),
     "OH": ("Home office", "9DC3E6"),
     "UN": ("Ünnepnap", "C39BD3"),
+    "P":  ("Pihenőnap", "A9D18E"),
 }
+SUMMARY_CODES = [("SZ", "Szabadság"), ("B", "Betegszabadság"), ("OH", "Home office"), ("UN", "Ünnepnap"), ("P", "Pihenőnap")]
 
 # Váltott műszakrend: 3 hetes rotáció, az egész csapatra egyszerre érvényes.
 # A TODAY-t tartalmazó hét = Éjjel, utána Délután, utána Délelőtt, majd újra Éjjel...
 SHIFT_CYCLE = ["Éjjel", "Délután", "Délelőtt"]
-SHIFT_COLORS = {"Éjjel": "5B4B8A", "Délután": "F4B183", "Délelőtt": "FFE699"}
-WEEKLY_EXTRA_CODES = ["Szabadság", "Home office", "Egyéb"]
+WEEKLY_EXTRA_CODES = ["Szabadság", "Home office", "Pihenő", "Egyéb"]
 WEEKLY_CODES = SHIFT_CYCLE + WEEKLY_EXTRA_CODES
+WEEKLY_COLORS = {
+    "Éjjel": "5B4B8A", "Délután": "F4B183", "Délelőtt": "FFE699",
+    "Szabadság": "FFC000", "Home office": "9DC3E6", "Pihenő": "70AD47", "Egyéb": "D9D9D9",
+}
 
 FONT_NAME = "Arial"
 HEADER_FILL = PatternFill("solid", fgColor="2F5496")
@@ -55,10 +60,11 @@ ws_legend["B2"] = "Csapat nyilvántartó — használati útmutató"
 ws_legend["B2"].font = Font(name=FONT_NAME, bold=True, size=14)
 
 ws_legend["B4"] = "1) Napi jelenlét (évenkénti lapok): minden nap / minden dolgozó cellájába írd be a kódot (legördülő listából is választható)."
-ws_legend["B5"] = "2) Heti beosztás: a váltott műszakrend (Éjjel/Délután/Délelőtt) automatikusan ki van töltve 3 hetes rotációban, mindenkire egyszerre. Ahol valaki kivétel (szabin van, home office-ban stb.), azt felülírhatod az adott cellában."
-ws_legend["B6"] = "3) Mentsd el a fájlt, majd futtasd a generate_html.py scriptet — ez elkészíti a csapat számára a megtekinthető weboldalt (csapat_naptar.html)."
-ws_legend["B7"] = "4) Az elkészült html fájlt oszd meg a csapattal (email, közös meghajtó, intranet) — ők csak megnézik, nem szerkesztik."
-for r in range(4, 8):
+ws_legend["B5"] = "2) Heti beosztás: a váltott műszakrend (Éjjel/Délután/Délelőtt) automatikusan ki van töltve 3 hetes rotációban, mindenkire egyszerre. Ahol valaki kivétel (szabin van, pihenőn, home office-ban stb.), azt felülírhatod az adott cellában — ez automatikusan bekerül a weboldal 'Kivételek' listájába."
+ws_legend["B6"] = "3) Éves összesítő: automatikusan számolja évenként/dolgozónként a szabadság, betegszabadság, home office, ünnepnap és pihenőnap napok számát (a napi jelenlét lapok alapján)."
+ws_legend["B7"] = "4) Mentsd el a fájlt, majd futtasd a generate_html.py scriptet — ez elkészíti a csapat számára a megtekinthető weboldalt (csapat_naptar.html)."
+ws_legend["B8"] = "5) Az elkészült html fájlt oszd meg a csapattal (email, közös meghajtó, intranet) — ők csak megnézik, nem szerkesztik."
+for r in range(4, 9):
     ws_legend[f"B{r}"].font = Font(name=FONT_NAME, size=10)
     ws_legend[f"B{r}"].alignment = Alignment(wrap_text=True)
 
@@ -79,12 +85,19 @@ ws_legend[f"B{row}"].font = Font(name=FONT_NAME, bold=True, size=11)
 row += 1
 for shift in SHIFT_CYCLE:
     ws_legend[f"B{row}"] = shift
-    ws_legend[f"B{row}"].fill = PatternFill("solid", fgColor=SHIFT_COLORS[shift])
+    ws_legend[f"B{row}"].fill = PatternFill("solid", fgColor=WEEKLY_COLORS[shift])
     ws_legend[f"B{row}"].font = Font(name=FONT_NAME, size=10)
     row += 1
-ws_legend[f"B{row}"] = "Kivétel esetén választható még: " + ", ".join(WEEKLY_EXTRA_CODES)
-ws_legend[f"B{row}"].font = Font(name=FONT_NAME, size=10)
-ws_legend[f"B{row}"].alignment = Alignment(wrap_text=True)
+
+row += 1
+ws_legend[f"B{row}"] = "Kivétel esetén választható (felülírja a rotációt, bekerül a kivétel listába):"
+ws_legend[f"B{row}"].font = Font(name=FONT_NAME, bold=True, size=11)
+row += 1
+for code in WEEKLY_EXTRA_CODES:
+    ws_legend[f"B{row}"] = code
+    ws_legend[f"B{row}"].fill = PatternFill("solid", fgColor=WEEKLY_COLORS[code])
+    ws_legend[f"B{row}"].font = Font(name=FONT_NAME, size=10)
+    row += 1
 
 ws_legend.column_dimensions["A"].width = 2
 ws_legend.column_dimensions["B"].width = 60
@@ -123,7 +136,7 @@ for YEAR in YEARS:
         ws.cell(row=r, column=1, value=name).font = Font(name=FONT_NAME, size=10)
 
     data_range = f"B2:{get_column_letter(n_days + 1)}{N_EMPLOYEES + 1}"
-    dv = DataValidation(type="list", formula1='"" ,SZ,B,OH,UN', allow_blank=True)
+    dv = DataValidation(type="list", formula1='"" ,SZ,B,OH,UN,P', allow_blank=True)
     ws.add_data_validation(dv)
     dv.add(data_range)
 
@@ -184,7 +197,7 @@ ws2.add_data_validation(dv2)
 weekly_range = f"B2:{get_column_letter(len(week_starts)+1)}{N_EMPLOYEES+1}"
 dv2.add(weekly_range)
 
-for shift, color in SHIFT_COLORS.items():
+for shift, color in WEEKLY_COLORS.items():
     rule = CellIsRule(operator="equal", formula=[f'"{shift}"'], fill=PatternFill("solid", fgColor=color))
     ws2.conditional_formatting.add(weekly_range, rule)
 
@@ -199,6 +212,50 @@ for i in range(N_EMPLOYEES):
     r = i + 2
     for w in range(len(week_starts)):
         ws2.cell(row=r, column=w + 2, value=week_offset_to_shift[w])
+
+# minta kivételek: néhány felülírt hét, hogy a "Kivételek" lista lásson valamit
+cur_week_col = week_starts.index(today_monday) + 2
+ws2.cell(row=2, column=cur_week_col, value="Szabadság")       # Munkatárs 01: e héten szabin, nem Éjjel
+ws2.cell(row=3, column=cur_week_col + 1, value="Pihenő")      # Munkatárs 02: jövő héten pihenő
+ws2.cell(row=4, column=cur_week_col + 2, value="Home office") # Munkatárs 03: az azutáni héten home office
+
+# ---------------------------------------------------------------- Éves összesítő
+ws3 = wb.create_sheet("Éves összesítő")
+ws3.sheet_view.showGridLines = False
+ws3.freeze_panes = "B2"
+ws3["A1"] = "Munkatárs"
+ws3["A1"].font = HEADER_FONT
+ws3["A1"].fill = HEADER_FILL
+ws3.column_dimensions["A"].width = 16
+
+col = 2
+year_last_col = {}
+for YEAR in YEARS:
+    n_days = (datetime.date(YEAR, 12, 31) - datetime.date(YEAR, 1, 1)).days + 1
+    year_last_col[YEAR] = get_column_letter(n_days + 1)
+    for code, label in SUMMARY_CODES:
+        letter = get_column_letter(col)
+        cell = ws3.cell(row=1, column=col, value=f"{YEAR} {label}")
+        cell.font = HEADER_FONT
+        cell.fill = HEADER_FILL
+        cell.alignment = Alignment(text_rotation=90, horizontal="center", wrap_text=True)
+        ws3.column_dimensions[letter].width = 4.5
+        col += 1
+
+for i, name in enumerate(EMPLOYEES):
+    r = i + 2
+    ws3.cell(row=r, column=1, value=name).font = Font(name=FONT_NAME, size=10)
+    col = 2
+    for YEAR in YEARS:
+        sheet_name = f"Napi jelenlét {YEAR}"
+        last_col = year_last_col[YEAR]
+        rng = f"'{sheet_name}'!B{r}:{last_col}{r}"
+        for code, label in SUMMARY_CODES:
+            c = ws3.cell(row=r, column=col, value=f'=COUNTIF({rng},"{code}")')
+            c.number_format = "0"
+            c.font = Font(name=FONT_NAME, size=10)
+            c.alignment = Alignment(horizontal="center")
+            col += 1
 
 wb.save("csapat_nyilvantartas.xlsx")
 print("OK: csapat_nyilvantartas.xlsx elkészült")
