@@ -13,13 +13,52 @@ import datetime
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.worksheet.datavalidation import DataValidation
-from openpyxl.formatting.rule import CellIsRule
+from openpyxl.formatting.rule import CellIsRule, FormulaRule
 from openpyxl.utils import get_column_letter
 
 YEARS = [2025, 2026, 2027, 2028]
 TODAY = datetime.date(2026, 7, 13)
 N_EMPLOYEES = 16
 EMPLOYEES = [f"Munkatárs {i:02d}" for i in range(1, N_EMPLOYEES + 1)]
+DEFAULT_MIN_STAFFING = 10
+DEFAULT_VACATION_QUOTA = 20  # törvényi alap szabadságkeret napokban, soronként felülírható
+
+
+def easter_sunday(year):
+    """Húsvétvasárnap dátuma (Meeus/Jones/Butcher algoritmus, Gergely-naptár)."""
+    a = year % 19
+    b = year // 100
+    c = year % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i = c // 4
+    k = c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    day = ((h + l - 7 * m + 114) % 31) + 1
+    return datetime.date(year, month, day)
+
+
+def hungarian_holidays(year):
+    """Magyar hivatalos munkaszüneti napok listája egy adott évre."""
+    easter = easter_sunday(year)
+    return [
+        datetime.date(year, 1, 1),                        # Újév
+        datetime.date(year, 3, 15),                        # Nemzeti ünnep
+        easter - datetime.timedelta(days=2),               # Nagypéntek
+        easter + datetime.timedelta(days=1),                # Húsvéthétfő
+        datetime.date(year, 5, 1),                         # A munka ünnepe
+        easter + datetime.timedelta(days=50),               # Pünkösdhétfő
+        datetime.date(year, 8, 20),                        # Állami ünnep
+        datetime.date(year, 10, 23),                       # Nemzeti ünnep
+        datetime.date(year, 11, 1),                        # Mindenszentek
+        datetime.date(year, 12, 25),                       # Karácsony
+        datetime.date(year, 12, 26),                       # Karácsony másnapja
+    ]
 
 DAILY_CODES = {
     "":   ("Munkanap", "FFFFFF"),
@@ -47,6 +86,9 @@ HEADER_FONT = Font(name=FONT_NAME, bold=True, color="FFFFFF", size=9)
 WEEKEND_FILL = PatternFill("solid", fgColor="E7E6E6")
 THIN = Side(style="thin", color="D9D9D9")
 BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
+INPUT_FILL = PatternFill("solid", fgColor="FFFF00")
+INPUT_FONT = Font(name=FONT_NAME, color="0000FF", size=10)
+ALERT_FILL = PatternFill("solid", fgColor="FF6B6B")
 
 HU_MONTHS = ["jan", "feb", "márc", "ápr", "máj", "jún", "júl", "aug", "szep", "okt", "nov", "dec"]
 
@@ -61,16 +103,18 @@ ws_legend["B2"].font = Font(name=FONT_NAME, bold=True, size=14)
 
 ws_legend["B4"] = "1) Napi jelenlét (évenkénti lapok): minden nap / minden dolgozó cellájába írd be a kódot (legördülő listából is választható)."
 ws_legend["B5"] = "2) Heti beosztás: a váltott műszakrend (Éjjel/Délután/Délelőtt) automatikusan ki van töltve 3 hetes rotációban, mindenkire egyszerre. Ahol valaki kivétel (szabin van, pihenőn, home office-ban stb.), azt felülírhatod az adott cellában — ez automatikusan bekerül a weboldal 'Kivételek' listájába."
-ws_legend["B6"] = "3) Éves összesítő: automatikusan számolja évenként/dolgozónként a szabadság, betegszabadság, home office, ünnepnap és pihenőnap napok számát (a napi jelenlét lapok alapján)."
-ws_legend["B7"] = "4) Mentsd el a fájlt, majd futtasd a generate_html.py scriptet — ez elkészíti a csapat számára a megtekinthető weboldalt (csapat_naptar.html)."
-ws_legend["B8"] = "5) Az elkészült html fájlt oszd meg a csapattal (email, közös meghajtó, intranet) — ők csak megnézik, nem szerkesztik."
-for r in range(4, 9):
+ws_legend["B6"] = "3) Éves összesítő: automatikusan számolja évenként/dolgozónként a szabadság, betegszabadság, home office, ünnepnap és pihenőnap napok számát. A sárga 'Szabadságkeret' cellák szerkeszthetők (alapértelmezett 20 nap) — a 'Hátralévő szabadság' ebből vonja le a felhasznált napokat."
+ws_legend["B7"] = "4) A magyar munkaszüneti napok (Újév, Nagypéntek, Húsvét, Pünkösd, Aug.20, Okt.23, Nov.1, Karácsony stb.) minden évre automatikusan be vannak írva UN kóddal."
+ws_legend["B8"] = "5) Minden napi jelenlét lap alján van egy 'Jelenlévők száma' sor és egy sárga 'Minimum létszám' cella — ha egy napon a jelenlévők száma a küszöb alá esik, az a cella pirosra vált. Hétvégén ez a sor nem releváns."
+ws_legend["B9"] = "6) Mentsd el a fájlt, majd futtasd a generate_html.py scriptet — ez elkészíti a csapat számára a megtekinthető weboldalt (csapat_naptar.html)."
+ws_legend["B10"] = "7) Az elkészült html fájlt oszd meg a csapattal (email, közös meghajtó, intranet) — ők csak megnézik, nem szerkesztik."
+for r in range(4, 11):
     ws_legend[f"B{r}"].font = Font(name=FONT_NAME, size=10)
     ws_legend[f"B{r}"].alignment = Alignment(wrap_text=True)
 
-ws_legend["B9"] = "Napi kódok:"
-ws_legend["B9"].font = Font(name=FONT_NAME, bold=True, size=11)
-row = 10
+ws_legend["B12"] = "Napi kódok:"
+ws_legend["B12"].font = Font(name=FONT_NAME, bold=True, size=11)
+row = 13
 for code, (label, color) in DAILY_CODES.items():
     ws_legend[f"B{row}"] = code if code else "(üres)"
     ws_legend[f"C{row}"] = label
@@ -146,6 +190,12 @@ for YEAR in YEARS:
         rule = CellIsRule(operator="equal", formula=[f'"{code}"'], fill=PatternFill("solid", fgColor=color))
         ws.conditional_formatting.add(data_range, rule)
 
+    # magyar munkaszüneti napok automatikus beillesztése (UN)
+    for holiday in hungarian_holidays(YEAR):
+        col = 2 + (holiday - start).days
+        for r in range(2, N_EMPLOYEES + 2):
+            ws.cell(row=r, column=col, value="UN")
+
     # minta adat csak a 2026-os (jelenlegi) lapon, 2026.07 hónap körül
     if YEAR == 2026:
         sample_start_col = 2 + (datetime.date(YEAR, 7, 1) - start).days
@@ -157,6 +207,34 @@ for YEAR in YEARS:
         ws.cell(row=4, column=sample_start_col + 10, value="OH")
         ws.cell(row=4, column=sample_start_col + 11, value="OH")
         ws.cell(row=5, column=sample_start_col - 20, value="SZ")  # júniusi minta
+        # minta alullétszámozott nap (2026.07.16): 7 fő szabin -> 9 fő marad, a 10-es küszöb alatt
+        for emp_row in range(6, 13):
+            ws.cell(row=emp_row, column=sample_start_col + 15, value="SZ")
+
+    # napi jelenlévők száma (munkanapon dolgozók) + minimum létszám riasztás
+    staff_row = N_EMPLOYEES + 2
+    threshold_row = N_EMPLOYEES + 3
+    last_col_letter = get_column_letter(n_days + 1)
+
+    ws.cell(row=staff_row, column=1, value="Jelenlévők száma").font = Font(name=FONT_NAME, bold=True, size=9)
+    ws.cell(row=threshold_row, column=1, value="Minimum létszám:").font = Font(name=FONT_NAME, bold=True, size=9)
+    threshold_cell = ws.cell(row=threshold_row, column=2, value=DEFAULT_MIN_STAFFING)
+    threshold_cell.fill = INPUT_FILL
+    threshold_cell.font = INPUT_FONT
+    threshold_ref = f"$B${threshold_row}"
+
+    for d in range(n_days):
+        col = d + 2
+        letter = get_column_letter(col)
+        c = ws.cell(row=staff_row, column=col, value=f"=COUNTBLANK({letter}2:{letter}{N_EMPLOYEES+1})")
+        c.font = Font(name=FONT_NAME, size=9)
+        c.alignment = Alignment(horizontal="center")
+
+    staff_range = f"B{staff_row}:{last_col_letter}{staff_row}"
+    ws.conditional_formatting.add(
+        staff_range,
+        FormulaRule(formula=[f"B{staff_row}<{threshold_ref}"], fill=ALERT_FILL, font=Font(name=FONT_NAME, color="FFFFFF", bold=True)),
+    )
 
 # ---------------------------------------------------------------- Heti beosztás (folytonos, minden évre)
 ws2 = wb.create_sheet("Heti beosztás")
@@ -230,10 +308,13 @@ ws3.column_dimensions["A"].width = 16
 
 col = 2
 year_last_col = {}
+year_block_start = {}
 for YEAR in YEARS:
+    year_block_start[YEAR] = col
     n_days = (datetime.date(YEAR, 12, 31) - datetime.date(YEAR, 1, 1)).days + 1
     year_last_col[YEAR] = get_column_letter(n_days + 1)
-    for code, label in SUMMARY_CODES:
+    headers = [label for _, label in SUMMARY_CODES] + ["Szabadságkeret", "Hátralévő szabadság"]
+    for label in headers:
         letter = get_column_letter(col)
         cell = ws3.cell(row=1, column=col, value=f"{YEAR} {label}")
         cell.font = HEADER_FONT
@@ -245,17 +326,32 @@ for YEAR in YEARS:
 for i, name in enumerate(EMPLOYEES):
     r = i + 2
     ws3.cell(row=r, column=1, value=name).font = Font(name=FONT_NAME, size=10)
-    col = 2
     for YEAR in YEARS:
         sheet_name = f"Napi jelenlét {YEAR}"
         last_col = year_last_col[YEAR]
         rng = f"'{sheet_name}'!B{r}:{last_col}{r}"
+        col = year_block_start[YEAR]
+        szabadsag_col_letter = get_column_letter(col)  # az évblokk első oszlopa = Szabadság
         for code, label in SUMMARY_CODES:
             c = ws3.cell(row=r, column=col, value=f'=COUNTIF({rng},"{code}")')
             c.number_format = "0"
             c.font = Font(name=FONT_NAME, size=10)
             c.alignment = Alignment(horizontal="center")
             col += 1
+        # Szabadságkeret: szerkeszthető input, alapértelmezett 20 nap
+        keret_cell = ws3.cell(row=r, column=col, value=DEFAULT_VACATION_QUOTA)
+        keret_cell.number_format = "0"
+        keret_cell.fill = INPUT_FILL
+        keret_cell.font = INPUT_FONT
+        keret_cell.alignment = Alignment(horizontal="center")
+        keret_col_letter = get_column_letter(col)
+        col += 1
+        # Hátralévő szabadság = keret - felhasznált
+        hatra_cell = ws3.cell(row=r, column=col, value=f"={keret_col_letter}{r}-{szabadsag_col_letter}{r}")
+        hatra_cell.number_format = "0"
+        hatra_cell.font = Font(name=FONT_NAME, size=10, bold=True)
+        hatra_cell.alignment = Alignment(horizontal="center")
+        col += 1
 
 wb.save("csapat_nyilvantartas.xlsx")
 print("OK: csapat_nyilvantartas.xlsx elkészült")

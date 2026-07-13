@@ -1,10 +1,17 @@
 """
 Beolvassa a csapat_nyilvantartas.xlsx fájlt és elkészíti a csapat_naptar.html
-weboldalt — ezt lehet megosztani a csapattal (csak megtekintésre).
+weboldalt.
+
+Ez a script csak az ALAP felépítéshez kell (új év hozzáadása, ünnepnapok
+újraszámolása, teljes újraindítás). A napi haszálathoz NEM kell többé Excel
+vagy ez a script: a kész weboldalon van egy jelszóval védett "Szerkesztés"
+mód, ahol közvetlenül a böngészőben lehet módosítani az adatokat, majd a
+"Mentés" gombbal letölthető az új, önálló index.html (ezt kell feltölteni
+GitHub-ra).
 
 Futtatás:  python3 generate_html.py
-Bemenet:   csapat_nyilvantartas.xlsx  (a csoportvezető szerkeszti)
-Kimenet:   csapat_naptar.html        (ezt kapja a csapat)
+Bemenet:   csapat_nyilvantartas.xlsx  (a kiinduló adat)
+Kimenet:   csapat_naptar.html        (ezt kell index.html néven feltölteni)
 """
 import json
 import re
@@ -14,6 +21,7 @@ from openpyxl import load_workbook
 SRC = "csapat_nyilvantartas.xlsx"
 OUT = "csapat_naptar.html"
 TODAY = datetime.date(2026, 7, 13)
+EDIT_PASSWORD = "vezeto2026"  # ezt itt tudod megváltoztatni
 
 DAILY_CODES = {
     "":   {"label": "Munkanap", "color": "#ffffff"},
@@ -23,8 +31,7 @@ DAILY_CODES = {
     "UN": {"label": "Ünnepnap", "color": "#ab7fd1"},
     "P":  {"label": "Pihenőnap", "color": "#7cb872"},
 }
-SUMMARY_CODES = ["Szabadság", "Betegszabadság", "Home office", "Ünnepnap", "Pihenőnap"]
-QUOTA_LABELS = ["Szabadságkeret", "Hátralévő szabadság"]
+SUMMARY_CODES = ["SZ", "B", "OH", "UN", "P"]
 SHIFT_CYCLE = ["Éjjel", "Délután", "Délelőtt"]
 SHIFT_COLORS = {
     "Éjjel": "#5b4b8a",
@@ -35,6 +42,7 @@ SHIFT_COLORS = {
     "Pihenő": "#4d9a4d",
     "Egyéb": "#9aa1ab",
 }
+WEEKLY_CODES = SHIFT_CYCLE + ["Szabadság", "Home office", "Pihenő", "Egyéb"]
 
 wb = load_workbook(SRC, data_only=True)
 
@@ -66,26 +74,18 @@ for sheet_name in wb.sheetnames:
         daily[name] = row_codes
         r += 1
 
-    staff_row = r
     threshold_row = r + 1
-    staff_counts = [ws.cell(row=staff_row, column=c).value for c in range(2, max_col + 1)]
     min_staffing = ws.cell(row=threshold_row, column=2).value or 0
 
-    daily_by_year[year] = {
-        "dates": dates,
-        "employees": employees,
-        "daily": daily,
-        "staff_counts": staff_counts,
-        "min_staffing": min_staffing,
-    }
+    daily_by_year[year] = {"dates": dates, "employees": employees, "daily": daily, "min_staffing": min_staffing}
 years.sort()
 
 all_employees = daily_by_year[years[0]]["employees"]
 
-# --- heti beosztás beolvasása (folytonos, évekre bontva utólag a JS-ben) ---
+# --- heti beosztás beolvasása ---
 ws2 = wb["Heti beosztás"]
 max_col2 = ws2.max_column
-week_labels = []  # "YYYY.M.D"
+week_labels = []
 week_years = []
 for c in range(2, max_col2 + 1):
     label = ws2.cell(row=1, column=c).value
@@ -103,48 +103,23 @@ while ws2.cell(row=r, column=1).value:
     weekly[name] = row_vals
     r += 1
 
-# --- kivétel lista: ahol a tényleges heti bejegyzés eltér az elvárt rotációtól ---
-today_monday = TODAY - datetime.timedelta(days=TODAY.weekday())
-
-exceptions = []
-for name in all_employees:
-    vals = weekly.get(name, [])
-    for i, label in enumerate(week_labels):
-        y, mo, da = [int(x) for x in str(label).split(".")]
-        wk = datetime.date(y, mo, da)
-        offset = (wk - today_monday).days // 7
-        expected = SHIFT_CYCLE[offset % 3]
-        actual = vals[i] if i < len(vals) else ""
-        if actual and actual != expected:
-            exceptions.append({
-                "employee": name,
-                "week": f"{y}.{mo}.{da}",
-                "year": y,
-                "expected": expected,
-                "actual": actual,
-            })
-
-# --- éves összesítő beolvasása (COUNTIF + szabadságkeret formulák eredménye) ---
+# --- szabadságkeret beolvasása (csak a keret-oszlopok, a felhasznált/hátralévő
+#     mostantól élőben, a böngészőben számolódik az aktuális adatokból) ---
 ws3 = wb["Éves összesítő"]
 max_col3 = ws3.max_column
-summary_headers = [ws3.cell(row=1, column=c).value for c in range(2, max_col3 + 1)]
-summary = {}
+headers3 = [ws3.cell(row=1, column=c).value for c in range(2, max_col3 + 1)]
+quota = {name: {} for name in all_employees}
 r = 2
 while ws3.cell(row=r, column=1).value:
     name = ws3.cell(row=r, column=1).value
-    row_by_year = {}
-    for idx, header in enumerate(summary_headers):
+    for idx, header in enumerate(headers3):
         y_str, label = str(header).split(" ", 1)
-        y = int(y_str)
-        v = ws3.cell(row=r, column=idx + 2).value or 0
-        row_by_year.setdefault(y, {})[label] = v
-    summary[name] = row_by_year
+        if label == "Szabadságkeret":
+            quota.setdefault(name, {})[int(y_str)] = ws3.cell(row=r, column=idx + 2).value or 0
     r += 1
 
-# a mai nap "híd" adatok a JS-hez (napi + heti kiemeléshez)
 today_huabbr = ["jan", "feb", "márc", "ápr", "máj", "jún", "júl", "aug", "szep", "okt", "nov", "dec"][TODAY.month - 1]
-today_label = f"{today_huabbr}.{TODAY.day}"
-today_week_label = f"{today_monday.year}.{today_monday.month}.{today_monday.day}"
+today_monday = TODAY - datetime.timedelta(days=TODAY.weekday())
 
 data = {
     "generated": datetime.datetime.now().strftime("%Y.%m.%d %H:%M"),
@@ -155,14 +130,13 @@ data = {
     "week_years": week_years,
     "weekly": weekly,
     "codes": DAILY_CODES,
-    "shift_colors": SHIFT_COLORS,
-    "exceptions": exceptions,
-    "summary": summary,
     "summary_codes": SUMMARY_CODES,
-    "quota_labels": QUOTA_LABELS,
+    "shift_colors": SHIFT_COLORS,
+    "weekly_codes": WEEKLY_CODES,
+    "quota": quota,
     "today_year": TODAY.year,
-    "today_label": today_label,
-    "today_week_label": today_week_label,
+    "today_label": f"{today_huabbr}.{TODAY.day}",
+    "today_week_label": f"{today_monday.year}.{today_monday.month}.{today_monday.day}",
     "today_display": f"{TODAY.year}. {['jan.','febr.','márc.','ápr.','máj.','jún.','júl.','aug.','szept.','okt.','nov.','dec.'][TODAY.month-1]} {TODAY.day}.",
 }
 
@@ -199,11 +173,25 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   }
   header .titles h1 { margin: 0 0 6px 0; font-size: 23px; font-weight: 700; letter-spacing: -0.01em; }
   header .titles p { margin: 0; opacity: 0.88; font-size: 13px; }
-  header .today-badge {
+  .header-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .today-badge {
     background: rgba(255,255,255,0.16); border: 1px solid rgba(255,255,255,0.3);
-    border-radius: 999px; padding: 7px 16px; font-size: 13px; font-weight: 600; backdrop-filter: blur(2px);
+    border-radius: 999px; padding: 7px 16px; font-size: 13px; font-weight: 600;
   }
+  .hdr-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: rgba(255,255,255,0.16); border: 1px solid rgba(255,255,255,0.3); color: white;
+    border-radius: 999px; padding: 7px 16px; font-size: 13px; font-weight: 700; cursor: pointer;
+  }
+  .hdr-btn:hover { background: rgba(255,255,255,0.28); }
+  .hdr-btn.on { background: white; color: var(--accent); }
+  .hdr-btn svg { width: 14px; height: 14px; }
   .wrap { max-width: 1440px; margin: -14px auto 0; padding: 0 22px 30px; }
+  .edit-banner {
+    display: none; background: #fff7e6; border: 1px solid #f5c26b; color: #8a5a00;
+    border-radius: 10px; padding: 10px 16px; font-size: 13px; margin-bottom: 14px; font-weight: 600;
+  }
+  .edit-banner.show { display: block; }
   .tabs {
     display: flex; gap: 6px; margin-bottom: 16px; background: var(--card); border-radius: 999px;
     padding: 6px; box-shadow: var(--shadow); width: fit-content;
@@ -221,11 +209,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   .panel.active { display: block; }
   .controls { display: flex; gap: 14px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
   .controls label { font-size: 13px; font-weight: 600; color: var(--muted); }
-  select, input[type=text] {
+  select, input[type=text], input[type=number] {
     padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border); font-size: 13.5px;
     background: #fafafd; outline: none;
   }
-  select:focus, input[type=text]:focus { border-color: var(--accent); background: white; }
+  select:focus, input:focus { border-color: var(--accent); background: white; }
+  input[type=number] { width: 70px; }
   .btn-icon {
     display: inline-flex; align-items: center; gap: 6px; margin-left: auto;
     padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border); background: white;
@@ -251,6 +240,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   tbody tr:nth-child(even) td:not(.name-col):not([style]) { background: #fafafc; }
   tbody tr:hover td:not(.name-col) { filter: brightness(0.96); }
   tbody tr:hover td.name-col { background: #f4f4fb; }
+  td.editable { cursor: pointer; }
+  td.editable:hover { outline: 2px solid var(--accent); outline-offset: -2px; }
   .table-scroll { overflow: auto; max-height: 65vh; border: 1px solid var(--border); border-radius: 10px; }
   .staff-row td { font-weight: 700; background: #eef0f7; }
   .staff-row td.alert { background: #ef5350 !important; color: white; }
@@ -261,9 +252,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   }
   .legend span.swatch { display: inline-block; width: 11px; height: 11px; border-radius: 50%; border: 1px solid rgba(0,0,0,0.1); }
   footer { text-align: center; color: var(--muted); font-size: 12px; padding: 20px 24px 30px; }
-  .year-bar {
-    display: flex; justify-content: center; gap: 8px; margin: 26px auto 4px; flex-wrap: wrap;
-  }
+  .year-bar { display: flex; justify-content: center; gap: 8px; margin: 26px auto 4px; flex-wrap: wrap; }
   .year-btn {
     padding: 9px 22px; border-radius: 999px; border: 1px solid var(--border);
     background: white; cursor: pointer; font-size: 13.5px; font-weight: 700; color: var(--muted);
@@ -282,15 +271,25 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   .summary-card td.num { text-align: right; font-weight: 700; }
   .summary-card .quota-box {
     margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border);
-    display: flex; justify-content: space-between; align-items: baseline;
+    display: flex; justify-content: space-between; align-items: center;
   }
   .summary-card .quota-remaining { font-size: 20px; font-weight: 800; color: var(--accent); }
   .summary-card .quota-caption { font-size: 11px; color: var(--muted); }
   .empty-note { color: var(--muted); font-size: 13px; padding: 10px 0 16px; }
   td.today-col { box-shadow: inset 0 0 0 2px var(--accent); font-weight: 700; }
   th.today-col { background: #2f2b6b !important; }
+  .picker {
+    position: absolute; z-index: 50; background: white; border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.18);
+    border: 1px solid var(--border); padding: 6px; display: flex; flex-direction: column; gap: 2px; min-width: 150px;
+  }
+  .picker button {
+    display: flex; align-items: center; gap: 8px; border: none; background: transparent; text-align: left;
+    padding: 7px 10px; border-radius: 6px; cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--text);
+  }
+  .picker button:hover { background: #f4f4fb; }
+  .picker .dot { width: 10px; height: 10px; border-radius: 50%; border: 1px solid rgba(0,0,0,.1); flex-shrink: 0; }
   @media print {
-    header .today-badge, .tabs, .controls, .legend, .year-bar, footer, .btn-icon { display: none !important; }
+    .header-actions, .tabs, .controls, .legend, .year-bar, footer, .btn-icon, .edit-banner { display: none !important; }
     body { background: white; }
     .wrap { margin: 0; padding: 0; max-width: 100%; }
     .panel { display: none !important; box-shadow: none; border-radius: 0; padding: 0; }
@@ -302,14 +301,27 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </style>
 </head>
 <body>
+<script type="application/json" id="app-data">__DATA_JSON__</script>
 <header>
   <div class="titles">
     <h1>Csapat naptár — szabadság, betegség, munkarend</h1>
-    <p>Utolsó frissítés: __GENERATED__ &nbsp;·&nbsp; csak megtekintésre</p>
+    <p>Utolsó frissítés: __GENERATED__ &nbsp;·&nbsp; <span id="modeLabel">csak megtekintésre</span></p>
   </div>
-  <div class="today-badge">Ma: __TODAY_DISPLAY__</div>
+  <div class="header-actions">
+    <div class="today-badge">Ma: __TODAY_DISPLAY__</div>
+    <button class="hdr-btn" id="editToggleBtn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+      Szerkesztés
+    </button>
+    <button class="hdr-btn" id="saveBtn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>
+      Mentés
+    </button>
+  </div>
 </header>
 <div class="wrap">
+  <div class="edit-banner" id="editBanner">Szerkesztés mód bekapcsolva — kattints egy cellára a módosításhoz. Ha végeztél, kattints a "Mentés" gombra, és töltsd fel az így letöltött fájlt (index.html néven) a GitHub repóba.</div>
+
   <div class="tabs">
     <button class="tab-btn active" data-tab="daily">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>
@@ -335,6 +347,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       <select id="monthSelect"></select>
       <label>Keresés</label>
       <input type="text" id="searchDaily" placeholder="Munkatárs neve...">
+      <label id="minStaffLabel" style="display:none;">Min. létszám</label>
+      <input type="number" id="minStaffInput" style="display:none;">
       <button class="btn-icon" onclick="window.print()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M6 14h12v8H6z"/></svg>
         Nyomtatás / PDF
@@ -372,11 +386,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
   <div class="year-bar" id="yearBar"></div>
 </div>
-<footer>Generálva a csapat_nyilvantartas.xlsx fájlból &middot; a szerkesztést a csoportvezető végzi</footer>
+<footer>A jobb felső "Szerkesztés" móddal közvetlenül itt módosíthatod az adatokat, majd "Mentés"-sel töltsd le és töltsd fel a GitHub repóba.</footer>
 
 <script>
-const DATA = __DATA_JSON__;
+const DATA = JSON.parse(document.getElementById('app-data').textContent);
+const EDIT_PASSWORD = __EDIT_PASSWORD_JSON__;
 let currentYear = DATA.years.includes(DATA.today_year) ? DATA.today_year : DATA.years[0];
+let editMode = false;
 
 document.querySelectorAll('.tab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -384,10 +400,41 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
     btn.classList.add('active');
     document.getElementById(btn.dataset.tab).classList.add('active');
+    closePicker();
   });
 });
 
-// --- year bar (alul, minden nézetet vezérel) ---
+// --- edit mode toggle ---
+document.getElementById('editToggleBtn').addEventListener('click', () => {
+  if (!editMode) {
+    const pw = prompt('Add meg a szerkesztői jelszót:');
+    if (pw !== EDIT_PASSWORD) { if (pw !== null) alert('Hibás jelszó.'); return; }
+    editMode = true;
+  } else {
+    editMode = false;
+  }
+  document.getElementById('editToggleBtn').classList.toggle('on', editMode);
+  document.getElementById('editBanner').classList.toggle('show', editMode);
+  document.getElementById('modeLabel').textContent = editMode ? 'szerkesztés mód' : 'csak megtekintésre';
+  document.getElementById('minStaffLabel').style.display = editMode ? '' : 'none';
+  document.getElementById('minStaffInput').style.display = editMode ? '' : 'none';
+  renderAll();
+});
+
+// --- mentés: friss adat visszaírása a #app-data tag-be, majd a teljes oldal letöltése ---
+document.getElementById('saveBtn').addEventListener('click', () => {
+  document.getElementById('app-data').textContent = JSON.stringify(DATA);
+  const html = '<!DOCTYPE html>\\n' + document.documentElement.outerHTML;
+  const blob = new Blob([html], { type: 'text/html' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'index.html';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+});
+
+// --- year bar ---
 const yearBar = document.getElementById('yearBar');
 DATA.years.forEach(y => {
   const btn = document.createElement('button');
@@ -397,12 +444,12 @@ DATA.years.forEach(y => {
   btn.addEventListener('click', () => {
     currentYear = y;
     document.querySelectorAll('.year-btn').forEach(b => b.classList.toggle('active', parseInt(b.dataset.year) === y));
-    renderDaily(); renderWeekly(); renderExceptions(); renderSummary();
+    renderAll();
   });
   yearBar.appendChild(btn);
 });
 
-// --- legend (napi) ---
+// --- legend ---
 const legendEl = document.getElementById('legend');
 Object.entries(DATA.codes).forEach(([code, info]) => {
   if (!code) return;
@@ -411,8 +458,6 @@ Object.entries(DATA.codes).forEach(([code, info]) => {
   el.innerHTML = `<span class="swatch" style="background:${info.color}"></span>${info.label} (${code})`;
   legendEl.appendChild(el);
 });
-
-// --- legend (heti / műszak) ---
 const legendWeeklyEl = document.getElementById('legendWeekly');
 Object.entries(DATA.shift_colors).forEach(([label, color]) => {
   const el = document.createElement('span');
@@ -427,20 +472,58 @@ const huMonthAbbr = ['jan','feb','márc','ápr','máj','jún','júl','aug','szep
 const monthSelect = document.getElementById('monthSelect');
 monthNames.forEach((name, idx) => {
   const opt = document.createElement('option');
-  opt.value = idx;
-  opt.textContent = name;
+  opt.value = idx; opt.textContent = name;
   monthSelect.appendChild(opt);
 });
-monthSelect.value = new Date(2000, huMonthAbbr.indexOf(DATA.today_label.split('.')[0])).getMonth();
+monthSelect.value = huMonthAbbr.indexOf(DATA.today_label.split('.')[0]);
 
-function monthOfIndex(dates, i) {
-  return huMonthAbbr.indexOf(dates[i].split('.')[0]);
+function monthOfIndex(dates, i) { return huMonthAbbr.indexOf(dates[i].split('.')[0]); }
+function initials(name) { return name.replace('Munkatárs ', '').trim(); }
+
+// --- élő számítások (mindig az aktuális DATA-ból, hogy szerkesztés után is pontos legyen) ---
+function expectedShift(weekLabel) {
+  const [y, mo, da] = weekLabel.split('.').map(Number);
+  const [ty, tmo, tda] = DATA.today_week_label.split('.').map(Number);
+  const days = Math.round((Date.UTC(y, mo - 1, da) - Date.UTC(ty, tmo - 1, tda)) / 86400000);
+  const offset = Math.round(days / 7);
+  const idx = ((offset % 3) + 3) % 3;
+  return ['Éjjel', 'Délután', 'Délelőtt'][idx];
+}
+function computeStaffCounts(year) {
+  const yd = DATA.daily_by_year[year];
+  return yd.dates.map((d, i) => yd.employees.filter(name => !(yd.daily[name][i] || '')).length);
+}
+function computeSummary(name, year) {
+  const yd = DATA.daily_by_year[year];
+  const counts = { SZ: 0, B: 0, OH: 0, UN: 0, P: 0 };
+  const codes = (yd.daily[name] || []);
+  codes.forEach(c => { if (counts[c] !== undefined) counts[c]++; });
+  return counts;
 }
 
-function initials(name) {
-  return name.replace('Munkatárs ', '').trim();
+// --- popover a cellák szerkesztéséhez ---
+let pickerEl = null;
+function closePicker() { if (pickerEl) { pickerEl.remove(); pickerEl = null; } }
+document.addEventListener('click', (e) => {
+  if (pickerEl && !pickerEl.contains(e.target) && !e.target.classList.contains('editable')) closePicker();
+});
+function openPicker(cellEl, options, onSelect) {
+  closePicker();
+  pickerEl = document.createElement('div');
+  pickerEl.className = 'picker';
+  options.forEach(opt => {
+    const b = document.createElement('button');
+    b.innerHTML = `<span class="dot" style="background:${opt.color || '#fff'}"></span>${opt.label}`;
+    b.addEventListener('click', (ev) => { ev.stopPropagation(); onSelect(opt.value); closePicker(); });
+    pickerEl.appendChild(b);
+  });
+  document.body.appendChild(pickerEl);
+  const rect = cellEl.getBoundingClientRect();
+  pickerEl.style.left = (rect.left + window.scrollX) + 'px';
+  pickerEl.style.top = (rect.bottom + window.scrollY + 4) + 'px';
 }
 
+// --- napi jelenlét ---
 function renderDaily() {
   const yearData = DATA.daily_by_year[currentYear];
   if (!yearData) return;
@@ -448,13 +531,13 @@ function renderDaily() {
   const search = document.getElementById('searchDaily').value.trim().toLowerCase();
   const colIndexes = [];
   yearData.dates.forEach((d, i) => { if (monthOfIndex(yearData.dates, i) === monthIdx) colIndexes.push(i); });
-
   const isToday = (i) => currentYear === DATA.today_year && yearData.dates[i] === DATA.today_label;
+
+  document.getElementById('minStaffInput').value = yearData.min_staffing;
 
   let html = '<thead><tr><th class="name-col">Munkatárs</th>';
   colIndexes.forEach(i => {
-    const label = yearData.dates[i].split('.')[1];
-    html += `<th class="${isToday(i) ? 'today-col' : ''}">${label}</th>`;
+    html += `<th class="${isToday(i) ? 'today-col' : ''}">${yearData.dates[i].split('.')[1]}</th>`;
   });
   html += '</tr></thead><tbody>';
 
@@ -465,25 +548,38 @@ function renderDaily() {
       const code = (yearData.daily[name] && yearData.daily[name][i]) || '';
       const info = DATA.codes[code];
       const bg = (info && code) ? `background:${info.color}${code==='B'?';color:white':''};` : '';
-      const cls = isToday(i) ? 'today-col' : '';
-      html += `<td class="${cls}" style="${bg}" title="${info ? info.label : ''}">${code}</td>`;
+      const cls = (isToday(i) ? 'today-col ' : '') + (editMode ? 'editable' : '');
+      html += `<td class="${cls}" data-emp="${name}" data-idx="${i}" style="${bg}" title="${info ? info.label : ''}">${code}</td>`;
     });
     html += '</tr>';
   });
 
-  // jelenlévők száma sor
+  const staffCounts = computeStaffCounts(currentYear);
   html += `<tr class="staff-row"><td class="name-col">Jelenlévők száma</td>`;
   colIndexes.forEach(i => {
-    const count = yearData.staff_counts[i];
-    const low = count !== null && count < yearData.min_staffing;
-    html += `<td class="${low ? 'alert' : ''}" title="Minimum létszám: ${yearData.min_staffing}">${count ?? ''}</td>`;
+    const count = staffCounts[i];
+    const low = count < yearData.min_staffing;
+    html += `<td class="${low ? 'alert' : ''}" title="Minimum létszám: ${yearData.min_staffing}">${count}</td>`;
   });
-  html += '</tr>';
-
-  html += '</tbody>';
+  html += '</tr></tbody>';
   document.getElementById('dailyTable').innerHTML = html;
+
+  if (editMode) {
+    document.querySelectorAll('#dailyTable td.editable').forEach(cell => {
+      cell.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const name = cell.dataset.emp, idx = parseInt(cell.dataset.idx, 10);
+        const options = Object.entries(DATA.codes).map(([code, info]) => ({ value: code, label: info.label + (code ? ` (${code})` : ''), color: info.color }));
+        openPicker(cell, options, (val) => {
+          DATA.daily_by_year[currentYear].daily[name][idx] = val;
+          renderAll();
+        });
+      });
+    });
+  }
 }
 
+// --- heti beosztás ---
 function renderWeekly() {
   const search = document.getElementById('searchWeekly').value.trim().toLowerCase();
   const colIndexes = [];
@@ -505,17 +601,44 @@ function renderWeekly() {
       const color = DATA.shift_colors[v];
       const isToday = DATA.week_labels[i] === DATA.today_week_label;
       const style = color ? `background:${color}${v === 'Éjjel' ? ';color:white' : ''};` : '';
-      html += `<td class="${isToday ? 'today-col' : ''}" style="${style}">${v}</td>`;
+      const cls = (isToday ? 'today-col ' : '') + (editMode ? 'editable' : '');
+      html += `<td class="${cls}" data-emp="${name}" data-idx="${i}" style="${style}">${v}</td>`;
     });
     html += '</tr>';
   });
   html += '</tbody>';
   document.getElementById('weeklyTable').innerHTML = html;
+
+  if (editMode) {
+    document.querySelectorAll('#weeklyTable td.editable').forEach(cell => {
+      cell.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const name = cell.dataset.emp, idx = parseInt(cell.dataset.idx, 10);
+        const options = DATA.weekly_codes.map(v => ({ value: v, label: v, color: DATA.shift_colors[v] }));
+        openPicker(cell, options, (val) => {
+          DATA.weekly[name][idx] = val;
+          renderAll();
+        });
+      });
+    });
+  }
 }
 
+// --- kivételek ---
 function renderExceptions() {
   const search = document.getElementById('searchExc').value.trim().toLowerCase();
-  const rows = DATA.exceptions.filter(e => e.year === currentYear && (!search || e.employee.toLowerCase().includes(search)));
+  const rows = [];
+  DATA.employees.forEach(name => {
+    const vals = DATA.weekly[name] || [];
+    DATA.week_labels.forEach((label, i) => {
+      if (DATA.week_years[i] !== currentYear) return;
+      if (search && !name.toLowerCase().includes(search)) return;
+      const actual = vals[i] || '';
+      const exp = expectedShift(label);
+      if (actual && actual !== exp) rows.push({ employee: name, week: label, expected: exp, actual });
+    });
+  });
+
   let html = '<thead><tr><th class="name-col">Munkatárs</th><th>Hét</th><th>Elvárt (rotáció)</th><th>Tényleges</th></tr></thead><tbody>';
   if (rows.length === 0) {
     html += '<tr><td colspan="4" style="text-align:center;color:#6b7280;">Nincs kivétel ebben az évben.</td></tr>';
@@ -530,37 +653,57 @@ function renderExceptions() {
   document.getElementById('excTable').innerHTML = html;
 }
 
+// --- éves összesítő ---
 function renderSummary() {
   const container = document.getElementById('summaryCards');
   container.innerHTML = '';
+  const labelMap = { SZ: 'Szabadság', B: 'Betegszabadság', OH: 'Home office', UN: 'Ünnepnap', P: 'Pihenőnap' };
   DATA.employees.forEach(name => {
-    const yearData = (DATA.summary[name] || {})[currentYear] || {};
+    const counts = computeSummary(name, currentYear);
+    const keret = (DATA.quota[name] && DATA.quota[name][currentYear]) || 0;
+    const hatra = keret - counts.SZ;
     const card = document.createElement('div');
     card.className = 'summary-card';
     let rowsHtml = '';
     DATA.summary_codes.forEach(code => {
-      rowsHtml += `<tr><td>${code}</td><td class="num">${yearData[code] ?? 0}</td></tr>`;
+      rowsHtml += `<tr><td>${labelMap[code]}</td><td class="num">${counts[code]}</td></tr>`;
     });
-    const keret = yearData[DATA.quota_labels[0]] ?? 0;
-    const hatra = yearData[DATA.quota_labels[1]] ?? 0;
+    const keretInput = editMode
+      ? `<input type="number" value="${keret}" data-emp="${name}" class="quota-input" style="width:56px;">`
+      : `${keret} nap`;
     card.innerHTML = `<h3><span class="avatar">${initials(name)}</span>${name}</h3><table>${rowsHtml}</table>
       <div class="quota-box">
-        <span class="quota-caption">Keret: ${keret} nap</span>
+        <span class="quota-caption">Keret: ${keretInput}</span>
         <span class="quota-remaining">${hatra}<span class="quota-caption"> nap hátra</span></span>
       </div>`;
     container.appendChild(card);
   });
+
+  if (editMode) {
+    document.querySelectorAll('.quota-input').forEach(inp => {
+      inp.addEventListener('change', () => {
+        const name = inp.dataset.emp;
+        DATA.quota[name] = DATA.quota[name] || {};
+        DATA.quota[name][currentYear] = parseInt(inp.value, 10) || 0;
+        renderSummary();
+      });
+    });
+  }
 }
+
+document.getElementById('minStaffInput').addEventListener('change', (e) => {
+  DATA.daily_by_year[currentYear].min_staffing = parseInt(e.target.value, 10) || 0;
+  renderDaily();
+});
+
+function renderAll() { renderDaily(); renderWeekly(); renderExceptions(); renderSummary(); }
 
 monthSelect.addEventListener('change', renderDaily);
 document.getElementById('searchDaily').addEventListener('input', renderDaily);
 document.getElementById('searchWeekly').addEventListener('input', renderWeekly);
 document.getElementById('searchExc').addEventListener('input', renderExceptions);
 
-renderDaily();
-renderWeekly();
-renderExceptions();
-renderSummary();
+renderAll();
 </script>
 </body>
 </html>
@@ -569,7 +712,9 @@ renderSummary();
 html = (HTML_TEMPLATE
         .replace("__GENERATED__", data["generated"])
         .replace("__TODAY_DISPLAY__", data["today_display"])
+        .replace("__EDIT_PASSWORD_JSON__", json.dumps(EDIT_PASSWORD))
         .replace("__DATA_JSON__", json.dumps(data, ensure_ascii=False)))
 with open(OUT, "w", encoding="utf-8") as f:
     f.write(html)
 print("OK:", OUT)
+print("Szerkesztői jelszó:", EDIT_PASSWORD)
