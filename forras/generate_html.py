@@ -27,25 +27,25 @@ PEOPLE_DIR = "people"  # egy fájl / dolgozó, csak a saját adatával
 TODAY = datetime.date(2026, 7, 13)
 
 DAILY_CODES = {
-    "":   {"label": "Munkanap", "color": "#ffffff"},
-    "SZ": {"label": "Szabadság", "color": "#f5a623"},
-    "B":  {"label": "Betegszabadság", "color": "#ef5350"},
-    "OH": {"label": "Home office", "color": "#5b9bd5"},
-    "UN": {"label": "Ünnepnap", "color": "#ab7fd1"},
-    "P":  {"label": "Pihenőnap", "color": "#7cb872"},
+    "":     {"label": "Munkanap", "color": "#ffffff"},
+    "SZ":   {"label": "Vállalati szabadság", "color": "#f5a623"},
+    "SZMV": {"label": "Saját szabadság", "color": "#f7c948"},
+    "B":    {"label": "Betegszabadság", "color": "#ef5350"},
+    "UN":   {"label": "Ünnepnap", "color": "#ab7fd1"},
+    "P":    {"label": "Pihenőnap", "color": "#7cb872"},
 }
-SUMMARY_CODES = ["SZ", "B", "OH", "UN", "P"]
+SUMMARY_CODES = ["SZ", "SZMV", "B", "UN", "P"]
 SHIFT_CYCLE = ["Éjjel", "Délután", "Délelőtt"]
 SHIFT_COLORS = {
     "Éjjel": "#5b4b8a",
     "Délután": "#ef8f4e",
     "Délelőtt": "#f0c93b",
-    "Szabadság": "#f5a623",
-    "Home office": "#5b9bd5",
+    "Vállalati szabadság": "#f5a623",
+    "Saját szabadság": "#f7c948",
     "Pihenő": "#4d9a4d",
     "Egyéb": "#9aa1ab",
 }
-WEEKLY_CODES = SHIFT_CYCLE + ["Szabadság", "Home office", "Pihenő", "Egyéb"]
+WEEKLY_CODES = SHIFT_CYCLE + ["Vállalati szabadság", "Saját szabadság", "Pihenő", "Egyéb"]
 
 wb = load_workbook(SRC, data_only=True)
 
@@ -252,6 +252,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   .table-scroll { overflow: auto; max-height: 65vh; border: 1px solid var(--border); border-radius: 10px; }
   .staff-row td { font-weight: 700; background: #eef0f7; }
   .staff-row td.alert { background: #ef5350 !important; color: white; }
+  #excSummaryTable td.num, #excSummaryTable th { text-align: center; }
   .legend { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
   .legend span.chip {
     display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; padding: 5px 12px;
@@ -283,6 +284,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   .summary-card .quota-remaining { font-size: 20px; font-weight: 800; color: var(--accent); }
   .summary-card .quota-caption { font-size: 11px; color: var(--muted); }
   .empty-note { color: var(--muted); font-size: 13px; padding: 10px 0 16px; }
+  .subheading { font-size: 14px; font-weight: 700; color: var(--text); margin: 22px 0 10px; padding-top: 16px; border-top: 1px solid var(--border); }
+  td.total-row, th.total-row { font-weight: 800; background: #f3f4f6 !important; }
   td.today-col { box-shadow: inset 0 0 0 2px var(--accent); font-weight: 700; }
   th.today-col { background: #2f2b6b !important; }
   .picker {
@@ -417,6 +420,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     </div>
     <p class="empty-note">Azok a hetek, ahol a tényleges beosztás eltér az automatikus Éjjel→Délután→Délelőtt rotációtól (pl. szabadság, pihenő, home office, egyéb).</p>
     <div class="table-scroll"><table id="excTable"></table></div>
+    <h3 class="subheading">Összesítés — kivételek száma dolgozónként és típusonként</h3>
+    <div class="table-scroll"><table id="excSummaryTable"></table></div>
   </div>
 
   <div id="summary" class="panel">
@@ -584,6 +589,7 @@ function buildPersonalHtml(name) {
     codes: DATA.codes,
     summary_codes: DATA.summary_codes,
     shift_colors: DATA.shift_colors,
+    weekly_codes: DATA.weekly_codes,
     quota: { [name]: (DATA.quota[name] || {}) },
     today_year: DATA.today_year,
     today_label: DATA.today_label,
@@ -754,7 +760,7 @@ function computeStaffCounts(year) {
 }
 function computeSummary(name, year) {
   const yd = DATA.daily_by_year[year];
-  const counts = { SZ: 0, B: 0, OH: 0, UN: 0, P: 0 };
+  const counts = { SZ: 0, SZMV: 0, B: 0, UN: 0, P: 0 };
   const codes = (yd.daily[name] || []);
   codes.forEach(c => { if (counts[c] !== undefined) counts[c]++; });
   return counts;
@@ -918,17 +924,55 @@ function renderExceptions() {
   });
   html += '</tbody>';
   document.getElementById('excTable').innerHTML = html;
+
+  // --- összesítés: kivételek száma dolgozónként és típusonként (a keresés nem szűri, ez a teljes csapat) ---
+  const allRows = [];
+  DATA.employees.forEach(name => {
+    const vals = DATA.weekly[name] || [];
+    DATA.week_labels.forEach((label, i) => {
+      if (DATA.week_years[i] !== currentYear) return;
+      const actual = vals[i] || '';
+      const exp = expectedShift(label);
+      if (actual && actual !== exp) allRows.push({ employee: name, actual });
+    });
+  });
+  const types = DATA.weekly_codes;
+  const perEmp = {};
+  DATA.employees.forEach(name => { perEmp[name] = { total: 0 }; types.forEach(t => perEmp[name][t] = 0); });
+  const typeTotals = {}; types.forEach(t => typeTotals[t] = 0);
+  let grandTotal = 0;
+  allRows.forEach(r => {
+    if (!perEmp[r.employee]) return;
+    perEmp[r.employee].total++;
+    if (perEmp[r.employee][r.actual] !== undefined) perEmp[r.employee][r.actual]++;
+    if (typeTotals[r.actual] !== undefined) typeTotals[r.actual]++;
+    grandTotal++;
+  });
+
+  let sumHtml = '<thead><tr><th class="name-col">Munkatárs</th>';
+  types.forEach(t => { sumHtml += `<th>${t}</th>`; });
+  sumHtml += '<th>Összesen</th></tr></thead><tbody>';
+  DATA.employees.forEach(name => {
+    sumHtml += `<tr><td class="name-col">${name}</td>`;
+    types.forEach(t => { sumHtml += `<td class="num">${perEmp[name][t] || ''}</td>`; });
+    sumHtml += `<td class="num" style="font-weight:700;">${perEmp[name].total}</td></tr>`;
+  });
+  sumHtml += `<tr><td class="name-col total-row">Összesen</td>`;
+  types.forEach(t => { sumHtml += `<td class="num total-row">${typeTotals[t]}</td>`; });
+  sumHtml += `<td class="num total-row">${grandTotal}</td></tr>`;
+  sumHtml += '</tbody>';
+  document.getElementById('excSummaryTable').innerHTML = sumHtml;
 }
 
 // --- éves összesítő ---
 function renderSummary() {
   const container = document.getElementById('summaryCards');
   container.innerHTML = '';
-  const labelMap = { SZ: 'Szabadság', B: 'Betegszabadság', OH: 'Home office', UN: 'Ünnepnap', P: 'Pihenőnap' };
+  const labelMap = { SZ: 'Vállalati szabadság', SZMV: 'Saját szabadság', B: 'Betegszabadság', UN: 'Ünnepnap', P: 'Pihenőnap' };
   DATA.employees.forEach(name => {
     const counts = computeSummary(name, currentYear);
     const keret = (DATA.quota[name] && DATA.quota[name][currentYear]) || 0;
-    const hatra = keret - counts.SZ;
+    const hatra = keret - counts.SZ - counts.SZMV;
     const card = document.createElement('div');
     card.className = 'summary-card';
     let rowsHtml = '';
@@ -1086,6 +1130,8 @@ PERSONAL_TEMPLATE = """<!DOCTYPE html>
   <div id="exceptions" class="panel">
     <p class="empty-note">Azok a hetek, ahol a te beosztásod eltér az automatikus Éjjel→Délután→Délelőtt rotációtól.</p>
     <div class="table-scroll"><table id="excTable"></table></div>
+    <h3 class="subheading">Összesítés — kivételek száma típusonként</h3>
+    <div class="table-scroll"><table id="excSummaryTable"></table></div>
   </div>
 
   <div id="summary" class="panel">
@@ -1162,7 +1208,7 @@ function expectedShift(weekLabel) {
 }
 function computeSummary(name, year) {
   const yd = DATA.daily_by_year[year];
-  const counts = { SZ: 0, B: 0, OH: 0, UN: 0, P: 0 };
+  const counts = { SZ: 0, SZMV: 0, B: 0, UN: 0, P: 0 };
   (yd.daily[name] || []).forEach(c => { if (counts[c] !== undefined) counts[c]++; });
   return counts;
 }
@@ -1229,14 +1275,25 @@ function renderExceptions() {
   });
   html += '</tbody>';
   document.getElementById('excTable').innerHTML = html;
+
+  const types = DATA.weekly_codes || [];
+  const typeCounts = {};
+  types.forEach(t => typeCounts[t] = 0);
+  rows.forEach(e => { if (typeCounts[e.actual] !== undefined) typeCounts[e.actual]++; });
+  let sumHtml = '<thead><tr>';
+  types.forEach(t => { sumHtml += `<th>${t}</th>`; });
+  sumHtml += '<th>Összesen</th></tr></thead><tbody><tr>';
+  types.forEach(t => { sumHtml += `<td class="num">${typeCounts[t] || ''}</td>`; });
+  sumHtml += `<td class="num" style="font-weight:700;">${rows.length}</td></tr></tbody>`;
+  document.getElementById('excSummaryTable').innerHTML = sumHtml;
 }
 
 function renderSummary() {
   const container = document.getElementById('summaryCards');
-  const labelMap = { SZ: 'Szabadság', B: 'Betegszabadság', OH: 'Home office', UN: 'Ünnepnap', P: 'Pihenőnap' };
+  const labelMap = { SZ: 'Vállalati szabadság', SZMV: 'Saját szabadság', B: 'Betegszabadság', UN: 'Ünnepnap', P: 'Pihenőnap' };
   const counts = computeSummary(DATA.employee, currentYear);
   const keret = (DATA.quota[DATA.employee] && DATA.quota[DATA.employee][currentYear]) || 0;
-  const hatra = keret - counts.SZ;
+  const hatra = keret - counts.SZ - counts.SZMV;
   let rowsHtml = '';
   DATA.summary_codes.forEach(code => { rowsHtml += `<tr><td>${labelMap[code]}</td><td class="num">${counts[code]}</td></tr>`; });
   container.innerHTML = `<div class="summary-card" style="flex-basis:280px;"><h3>${DATA.employee}</h3><table>${rowsHtml}</table>
@@ -1293,6 +1350,7 @@ for name in all_employees:
         "codes": DAILY_CODES,
         "summary_codes": SUMMARY_CODES,
         "shift_colors": SHIFT_COLORS,
+        "weekly_codes": WEEKLY_CODES,
         "quota": {name: quota.get(name, {})},
         "today_year": data["today_year"],
         "today_label": data["today_label"],

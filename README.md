@@ -42,7 +42,7 @@ kiküldeni.
 6. Pár perc múlva élesben:
    - Főoldal (üres): `https://<felhasználóneved>.github.io/csapat-naptar/`
    - Admin: `https://<felhasználóneved>.github.io/csapat-naptar/admin.html`
-   - Egy dolgozó: `https://<felhasználóneved>.github.io/csapat-naptar/people/munkatars-01.html`
+   - Egy dolgozó: `https://<felhasználóneved>.github.io/csapat-naptar/people/24009.html`
 
 ## Frissítés (naponta ezt használd — nincs szükség Excelre vagy scriptre)
 
@@ -65,6 +65,15 @@ kiküldeni.
    automatikusan frissíti mind a 15 `people/<azonosító>.html` fájlt is** ugyanazzal az
    adattal. Egy pillanatig eltarthat (15 külön fájlt ír fel egymás után) — a folyamat
    végén egy visszajelzés mutatja, hány oldal frissült sikeresen.
+
+A "Kivételek" fülön (mind az admin, mind a személyes oldalakon) alul egy összesítő tábla
+mutatja dolgozónként és típusonként (Éjjel/Délután/Délelőtt-csere, Vállalati szabadság,
+Saját szabadság, Pihenő, Egyéb), hányszor tért el valaki az automatikus rotációtól az adott
+évben, plusz egy végösszeg sort is.
+
+**Napi kódok:** `SZ` = vállalati szabadság, `SZMV` = saját szabadság, `B` = betegszabadság,
+`UN` = ünnepnap, `P` = pihenőnap. A két szabadságtípus (SZ + SZMV) együtt terheli ugyanazt az
+éves "Szabadságkeretet" — a "Hátralévő szabadság" mindkettőt levonja belőle.
 
 ## Ritkán használt: teljes újraépítés Excelből (ez frissíti a people/ mappát is)
 

@@ -64,23 +64,23 @@ def hungarian_holidays(year):
     ]
 
 DAILY_CODES = {
-    "":   ("Munkanap", "FFFFFF"),
-    "SZ": ("Szabadság", "FFC000"),
-    "B":  ("Betegszabadság", "FF6B6B"),
-    "OH": ("Home office", "9DC3E6"),
-    "UN": ("Ünnepnap", "C39BD3"),
-    "P":  ("Pihenőnap", "A9D18E"),
+    "":     ("Munkanap", "FFFFFF"),
+    "SZ":   ("Vállalati szabadság", "FFC000"),
+    "SZMV": ("Saját szabadság", "FFD966"),
+    "B":    ("Betegszabadság", "FF6B6B"),
+    "UN":   ("Ünnepnap", "C39BD3"),
+    "P":    ("Pihenőnap", "A9D18E"),
 }
-SUMMARY_CODES = [("SZ", "Szabadság"), ("B", "Betegszabadság"), ("OH", "Home office"), ("UN", "Ünnepnap"), ("P", "Pihenőnap")]
+SUMMARY_CODES = [("SZ", "Vállalati szabadság"), ("SZMV", "Saját szabadság"), ("B", "Betegszabadság"), ("UN", "Ünnepnap"), ("P", "Pihenőnap")]
 
 # Váltott műszakrend: 3 hetes rotáció, az egész csapatra egyszerre érvényes.
 # A TODAY-t tartalmazó hét = Éjjel, utána Délután, utána Délelőtt, majd újra Éjjel...
 SHIFT_CYCLE = ["Éjjel", "Délután", "Délelőtt"]
-WEEKLY_EXTRA_CODES = ["Szabadság", "Home office", "Pihenő", "Egyéb"]
+WEEKLY_EXTRA_CODES = ["Vállalati szabadság", "Saját szabadság", "Pihenő", "Egyéb"]
 WEEKLY_CODES = SHIFT_CYCLE + WEEKLY_EXTRA_CODES
 WEEKLY_COLORS = {
     "Éjjel": "5B4B8A", "Délután": "F4B183", "Délelőtt": "FFE699",
-    "Szabadság": "FFC000", "Home office": "9DC3E6", "Pihenő": "70AD47", "Egyéb": "D9D9D9",
+    "Vállalati szabadság": "FFC000", "Saját szabadság": "FFD966", "Pihenő": "70AD47", "Egyéb": "D9D9D9",
 }
 
 FONT_NAME = "Arial"
@@ -105,8 +105,8 @@ ws_legend["B2"] = "Csapat nyilvántartó — használati útmutató"
 ws_legend["B2"].font = Font(name=FONT_NAME, bold=True, size=14)
 
 ws_legend["B4"] = "1) Napi jelenlét (évenkénti lapok): minden nap / minden dolgozó cellájába írd be a kódot (legördülő listából is választható)."
-ws_legend["B5"] = "2) Heti beosztás: a váltott műszakrend (Éjjel/Délután/Délelőtt) automatikusan ki van töltve 3 hetes rotációban, mindenkire egyszerre. Ahol valaki kivétel (szabin van, pihenőn, home office-ban stb.), azt felülírhatod az adott cellában — ez automatikusan bekerül a weboldal 'Kivételek' listájába."
-ws_legend["B6"] = "3) Éves összesítő: automatikusan számolja évenként/dolgozónként a szabadság, betegszabadság, home office, ünnepnap és pihenőnap napok számát. A sárga 'Szabadságkeret' cellák szerkeszthetők (alapértelmezett 20 nap) — a 'Hátralévő szabadság' ebből vonja le a felhasznált napokat."
+ws_legend["B5"] = "2) Heti beosztás: a váltott műszakrend (Éjjel/Délután/Délelőtt) automatikusan ki van töltve 3 hetes rotációban, mindenkire egyszerre. Ahol valaki kivétel (szabin van — saját vagy vállalati —, pihenőn stb.), azt felülírhatod az adott cellában — ez automatikusan bekerül a weboldal 'Kivételek' listájába."
+ws_legend["B6"] = "3) Éves összesítő: automatikusan számolja évenként/dolgozónként a vállalati szabadság, saját szabadság, betegszabadság, ünnepnap és pihenőnap napok számát. A sárga 'Szabadságkeret' cellák szerkeszthetők (alapértelmezett 20 nap) — a 'Hátralévő szabadság' ebből vonja le a felhasznált (vállalati + saját) szabadságnapokat."
 ws_legend["B7"] = "4) A magyar munkaszüneti napok (Újév, Nagypéntek, Húsvét, Pünkösd, Aug.20, Okt.23, Nov.1, Karácsony stb.) minden évre automatikusan be vannak írva UN kóddal."
 ws_legend["B8"] = "5) Minden napi jelenlét lap alján van egy 'Jelenlévők száma' sor és egy sárga 'Minimum létszám' cella — ha egy napon a jelenlévők száma a küszöb alá esik, az a cella pirosra vált. Hétvégén ez a sor nem releváns."
 ws_legend["B9"] = "6) Mentsd el a fájlt, majd futtasd a generate_html.py scriptet — ez elkészíti a csapat számára a megtekinthető weboldalt (csapat_naptar.html)."
@@ -183,7 +183,7 @@ for YEAR in YEARS:
         ws.cell(row=r, column=1, value=name).font = Font(name=FONT_NAME, size=10)
 
     data_range = f"B2:{get_column_letter(n_days + 1)}{N_EMPLOYEES + 1}"
-    dv = DataValidation(type="list", formula1='"" ,SZ,B,OH,UN,P', allow_blank=True)
+    dv = DataValidation(type="list", formula1='"" ,SZ,SZMV,B,UN,P', allow_blank=True)
     ws.add_data_validation(dv)
     dv.add(data_range)
 
@@ -207,8 +207,8 @@ for YEAR in YEARS:
         ws.cell(row=2, column=sample_start_col + 7, value="SZ")
         ws.cell(row=3, column=sample_start_col + 1, value="B")
         ws.cell(row=3, column=sample_start_col + 2, value="B")
-        ws.cell(row=4, column=sample_start_col + 10, value="OH")
-        ws.cell(row=4, column=sample_start_col + 11, value="OH")
+        ws.cell(row=4, column=sample_start_col + 10, value="SZMV")
+        ws.cell(row=4, column=sample_start_col + 11, value="SZMV")
         ws.cell(row=5, column=sample_start_col - 20, value="SZ")  # júniusi minta
         # minta alullétszámozott nap (2026.07.16): 7 fő szabin -> 9 fő marad, a 10-es küszöb alatt
         for emp_row in range(6, 13):
@@ -296,9 +296,9 @@ for i in range(N_EMPLOYEES):
 
 # minta kivételek: néhány felülírt hét, hogy a "Kivételek" lista lásson valamit
 cur_week_col = week_starts.index(today_monday) + 2
-ws2.cell(row=2, column=cur_week_col, value="Szabadság")       # Munkatárs 01: e héten szabin, nem Éjjel
-ws2.cell(row=3, column=cur_week_col + 1, value="Pihenő")      # Munkatárs 02: jövő héten pihenő
-ws2.cell(row=4, column=cur_week_col + 2, value="Home office") # Munkatárs 03: az azutáni héten home office
+ws2.cell(row=2, column=cur_week_col, value="Saját szabadság")        # 1. dolgozó: e héten szabin, nem Éjjel
+ws2.cell(row=3, column=cur_week_col + 1, value="Pihenő")             # 2. dolgozó: jövő héten pihenő
+ws2.cell(row=4, column=cur_week_col + 2, value="Vállalati szabadság") # 3. dolgozó: az azutáni héten vállalati szabin
 
 # ---------------------------------------------------------------- Éves összesítő
 ws3 = wb.create_sheet("Éves összesítő")
@@ -334,12 +334,13 @@ for i, name in enumerate(EMPLOYEES):
         last_col = year_last_col[YEAR]
         rng = f"'{sheet_name}'!B{r}:{last_col}{r}"
         col = year_block_start[YEAR]
-        szabadsag_col_letter = get_column_letter(col)  # az évblokk első oszlopa = Szabadság
+        code_col_letter = {}  # kód -> oszlopbetű, hogy a hátralévő formula pontosan a SZ+SZMV oszlopokra hivatkozzon
         for code, label in SUMMARY_CODES:
             c = ws3.cell(row=r, column=col, value=f'=COUNTIF({rng},"{code}")')
             c.number_format = "0"
             c.font = Font(name=FONT_NAME, size=10)
             c.alignment = Alignment(horizontal="center")
+            code_col_letter[code] = get_column_letter(col)
             col += 1
         # Szabadságkeret: szerkeszthető input, alapértelmezett 20 nap
         keret_cell = ws3.cell(row=r, column=col, value=DEFAULT_VACATION_QUOTA)
@@ -349,8 +350,12 @@ for i, name in enumerate(EMPLOYEES):
         keret_cell.alignment = Alignment(horizontal="center")
         keret_col_letter = get_column_letter(col)
         col += 1
-        # Hátralévő szabadság = keret - felhasznált
-        hatra_cell = ws3.cell(row=r, column=col, value=f"={keret_col_letter}{r}-{szabadsag_col_letter}{r}")
+        # Hátralévő szabadság = keret - (vállalati szabadság + saját szabadság) — a két típus együtt
+        # terheli ugyanazt az éves keretet.
+        hatra_cell = ws3.cell(
+            row=r, column=col,
+            value=f"={keret_col_letter}{r}-{code_col_letter['SZ']}{r}-{code_col_letter['SZMV']}{r}",
+        )
         hatra_cell.number_format = "0"
         hatra_cell.font = Font(name=FONT_NAME, size=10, bold=True)
         hatra_cell.alignment = Alignment(horizontal="center")
