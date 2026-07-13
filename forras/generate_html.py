@@ -245,6 +245,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   tbody tr:hover td.name-col { background: #f4f4fb; }
   td.editable { cursor: pointer; }
   td.editable:hover { outline: 2px solid var(--accent); outline-offset: -2px; }
+  td.editable-name { cursor: pointer; }
+  td.editable-name:hover { background: #eef0fb; text-decoration: underline; text-decoration-style: dotted; }
+  .editable-name-inline { cursor: pointer; }
+  .editable-name-inline:hover { text-decoration: underline; text-decoration-style: dotted; }
   .table-scroll { overflow: auto; max-height: 65vh; border: 1px solid var(--border); border-radius: 10px; }
   .staff-row td { font-weight: 700; background: #eef0f7; }
   .staff-row td.alert { background: #ef5350 !important; color: white; }
@@ -434,7 +438,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <label>Branch</label>
     <input id="cfgBranch" placeholder="main" value="main">
     <label>Fájl elérési útja a repóban</label>
-    <input id="cfgPath" placeholder="index.html" value="index.html">
+    <input id="cfgPath" placeholder="admin.html" value="admin.html">
     <label>Personal access token</label>
     <input id="cfgToken" type="password" placeholder="ghp_...">
     <div class="modal-actions">
@@ -484,7 +488,7 @@ function openSettings(enableEditAfter) {
   document.getElementById('cfgOwner').value = c.owner || '';
   document.getElementById('cfgRepo').value = c.repo || '';
   document.getElementById('cfgBranch').value = c.branch || 'main';
-  document.getElementById('cfgPath').value = c.path || 'index.html';
+  document.getElementById('cfgPath').value = c.path || 'admin.html';
   document.getElementById('cfgToken').value = c.token || '';
   document.getElementById('settingsOverlay').classList.add('show');
 }
@@ -505,10 +509,14 @@ document.getElementById('cfgSave').addEventListener('click', () => {
     owner: document.getElementById('cfgOwner').value.trim(),
     repo: document.getElementById('cfgRepo').value.trim(),
     branch: document.getElementById('cfgBranch').value.trim() || 'main',
-    path: document.getElementById('cfgPath').value.trim() || 'index.html',
+    path: document.getElementById('cfgPath').value.trim() || 'admin.html',
     token: document.getElementById('cfgToken').value.trim(),
   };
   if (!cfg.owner || !cfg.repo || !cfg.token) { alert('Töltsd ki a felhasználót, a repó nevét és a tokent.'); return; }
+  if (cfg.path === 'index.html') {
+    const ok = confirm('Figyelem: az "index.html" a publikus, adatmentes főoldal! Ha erre mented a teljes csapatnaptárt, mindenki adata nyilvánossá válik. Biztosan ezt akarod (nem inkább "admin.html")?');
+    if (!ok) return;
+  }
   saveCfg(cfg);
   closeSettings();
   if (pendingEnableEdit) { editMode = true; updateEditUI(); }
@@ -633,7 +641,30 @@ monthNames.forEach((name, idx) => {
 monthSelect.value = huMonthAbbr.indexOf(DATA.today_label.split('.')[0]);
 
 function monthOfIndex(dates, i) { return huMonthAbbr.indexOf(dates[i].split('.')[0]); }
-function initials(name) { return name.replace('Munkatárs ', '').trim(); }
+function initials(name) {
+  const parts = name.replace('Munkatárs ', '').trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '?';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+// --- munkatárs átnevezése (minden adatstruktúrában konzisztensen) ---
+function renameEmployee(oldName) {
+  const input = prompt('Új név:', oldName);
+  if (input === null) return;
+  const newName = input.trim();
+  if (!newName || newName === oldName) return;
+  if (DATA.employees.includes(newName)) { alert('Már létezik ilyen nevű munkatárs.'); return; }
+  DATA.employees = DATA.employees.map(n => n === oldName ? newName : n);
+  DATA.years.forEach(y => {
+    const yd = DATA.daily_by_year[y];
+    yd.employees = yd.employees.map(n => n === oldName ? newName : n);
+    if (yd.daily[oldName] !== undefined) { yd.daily[newName] = yd.daily[oldName]; delete yd.daily[oldName]; }
+  });
+  if (DATA.weekly[oldName] !== undefined) { DATA.weekly[newName] = DATA.weekly[oldName]; delete DATA.weekly[oldName]; }
+  if (DATA.quota[oldName] !== undefined) { DATA.quota[newName] = DATA.quota[oldName]; delete DATA.quota[oldName]; }
+  renderAll();
+}
 
 // --- élő számítások (mindig az aktuális DATA-ból, hogy szerkesztés után is pontos legyen) ---
 function expectedShift(weekLabel) {
@@ -698,7 +729,8 @@ function renderDaily() {
 
   yearData.employees.forEach(name => {
     if (search && !name.toLowerCase().includes(search)) return;
-    html += `<tr><td class="name-col"><span class="avatar">${initials(name)}</span>${name}</td>`;
+    const nameCls = editMode ? 'name-col editable-name' : 'name-col';
+    html += `<tr><td class="${nameCls}" data-name="${name}" title="${editMode ? 'Kattints az átnevezéshez' : ''}"><span class="avatar">${initials(name)}</span>${name}</td>`;
     colIndexes.forEach(i => {
       const code = (yearData.daily[name] && yearData.daily[name][i]) || '';
       const info = DATA.codes[code];
@@ -731,6 +763,9 @@ function renderDaily() {
         });
       });
     });
+    document.querySelectorAll('#dailyTable td.editable-name').forEach(cell => {
+      cell.addEventListener('click', (e) => { e.stopPropagation(); renameEmployee(cell.dataset.name); });
+    });
   }
 }
 
@@ -750,7 +785,8 @@ function renderWeekly() {
   DATA.employees.forEach(name => {
     if (search && !name.toLowerCase().includes(search)) return;
     const vals = DATA.weekly[name] || [];
-    html += `<tr><td class="name-col"><span class="avatar">${initials(name)}</span>${name}</td>`;
+    const nameCls = editMode ? 'name-col editable-name' : 'name-col';
+    html += `<tr><td class="${nameCls}" data-name="${name}" title="${editMode ? 'Kattints az átnevezéshez' : ''}"><span class="avatar">${initials(name)}</span>${name}</td>`;
     colIndexes.forEach(i => {
       const v = vals[i] || '';
       const color = DATA.shift_colors[v];
@@ -765,6 +801,9 @@ function renderWeekly() {
   document.getElementById('weeklyTable').innerHTML = html;
 
   if (editMode) {
+    document.querySelectorAll('#weeklyTable td.editable-name').forEach(cell => {
+      cell.addEventListener('click', (e) => { e.stopPropagation(); renameEmployee(cell.dataset.name); });
+    });
     document.querySelectorAll('#weeklyTable td.editable').forEach(cell => {
       cell.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -826,7 +865,10 @@ function renderSummary() {
     const keretInput = editMode
       ? `<input type="number" value="${keret}" data-emp="${name}" class="quota-input" style="width:56px;">`
       : `${keret} nap`;
-    card.innerHTML = `<h3><span class="avatar">${initials(name)}</span>${name}</h3><table>${rowsHtml}</table>
+    const nameHtml = editMode
+      ? `<span class="editable-name-inline" data-name="${name}" title="Kattints az átnevezéshez"><span class="avatar">${initials(name)}</span>${name} ✎</span>`
+      : `<span class="avatar">${initials(name)}</span>${name}`;
+    card.innerHTML = `<h3>${nameHtml}</h3><table>${rowsHtml}</table>
       <div class="quota-box">
         <span class="quota-caption">Keret: ${keretInput}</span>
         <span class="quota-remaining">${hatra}<span class="quota-caption"> nap hátra</span></span>
@@ -842,6 +884,9 @@ function renderSummary() {
         DATA.quota[name][currentYear] = parseInt(inp.value, 10) || 0;
         renderSummary();
       });
+    });
+    document.querySelectorAll('.editable-name-inline').forEach(el => {
+      el.addEventListener('click', (e) => { e.stopPropagation(); renameEmployee(el.dataset.name); });
     });
   }
 }
