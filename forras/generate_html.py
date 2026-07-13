@@ -283,6 +283,39 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   }
   .summary-card .quota-remaining { font-size: 20px; font-weight: 800; color: var(--accent); }
   .summary-card .quota-caption { font-size: 11px; color: var(--muted); }
+  .summary-card .password-box {
+    margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border);
+    display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 12px;
+  }
+  .password-input {
+    border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; font-size: 12px;
+    font-family: monospace;
+  }
+  .btn-mini {
+    border: 1px solid var(--border); background: white; border-radius: 6px; cursor: pointer;
+    padding: 3px 6px; font-size: 12px; line-height: 1;
+  }
+  .btn-mini:hover { background: #f1f1f6; }
+  .lock-screen {
+    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(120deg, var(--accent) 0%, var(--accent2) 100%); padding: 20px;
+  }
+  .lock-card {
+    background: white; border-radius: var(--radius); box-shadow: var(--shadow);
+    padding: 32px 28px; max-width: 360px; width: 100%; text-align: center;
+  }
+  .lock-card h2 { margin: 0 0 10px; font-size: 19px; }
+  .lock-card p { color: var(--muted); font-size: 13px; margin: 0 0 18px; line-height: 1.5; }
+  .lock-card input[type="password"] {
+    width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px;
+    font-size: 14px; margin-bottom: 12px; box-sizing: border-box;
+  }
+  .lock-card button {
+    width: 100%; padding: 10px 12px; border: none; border-radius: 10px; cursor: pointer;
+    background: linear-gradient(120deg, var(--accent), var(--accent2)); color: white; font-weight: 700; font-size: 14px;
+  }
+  .lock-card button:hover { opacity: .92; }
+  .lock-error { color: #ef5350; font-size: 12.5px; margin: 10px 0 0; min-height: 16px; }
   .empty-note { color: var(--muted); font-size: 13px; padding: 10px 0 16px; }
   .subheading { font-size: 14px; font-weight: 700; color: var(--text); margin: 22px 0 10px; padding-top: 16px; border-top: 1px solid var(--border); }
   td.total-row, th.total-row { font-weight: 800; background: #f3f4f6 !important; }
@@ -461,6 +494,8 @@ const DATA = JSON.parse(document.getElementById('app-data').textContent);
 let currentYear = DATA.years.includes(DATA.today_year) ? DATA.today_year : DATA.years[0];
 let editMode = false;
 const PERSONAL_TEMPLATE = __PERSONAL_TEMPLATE_JSON__;
+DATA.passwords = DATA.passwords || {};
+DATA.employees.forEach(n => { if (DATA.passwords[n] === undefined) DATA.passwords[n] = ''; });
 
 document.querySelectorAll('.tab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -571,7 +606,40 @@ function slugify(name) {
 }
 function replaceAllStr(str, search, val) { return str.split(search).join(val); }
 
-function buildPersonalHtml(name) {
+// --- jelszavas titkosítás a személyes oldalakhoz (PBKDF2 + AES-GCM, Web Crypto API) ---
+// Statikus oldalról van szó (nincs szerver), ezért az egyetlen módja, hogy a jelszó
+// valóban védjen: maga az adat is titkosítva legyen vele, ne csak egy jelszót kérő
+// felugró ablak takarja el a már amúgy is a forráskódban jelenlévő adatot.
+const PW_ITERATIONS = 250000;
+function b64FromBytes(bytes) {
+  let bin = '';
+  bytes.forEach(b => { bin += String.fromCharCode(b); });
+  return btoa(bin);
+}
+function bytesFromB64(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+async function derivePasswordKey(password, saltBytes) {
+  const enc = new TextEncoder();
+  const baseKey = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt: saltBytes, iterations: PW_ITERATIONS, hash: 'SHA-256' },
+    baseKey, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt'],
+  );
+}
+async function encryptWithPassword(obj, password) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await derivePasswordKey(password, salt);
+  const enc = new TextEncoder();
+  const cipherBuf = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(JSON.stringify(obj)));
+  return { v: 1, salt: b64FromBytes(salt), iv: b64FromBytes(iv), data: b64FromBytes(new Uint8Array(cipherBuf)) };
+}
+
+async function buildPersonalHtml(name) {
   const cssBlock = document.querySelector('style').textContent;
   const pDaily = {};
   DATA.years.forEach(y => {
@@ -596,12 +664,15 @@ function buildPersonalHtml(name) {
     today_week_label: DATA.today_week_label,
     today_display: DATA.today_display,
   };
+  const password = DATA.passwords[name];
+  const payload = password ? await encryptWithPassword(pData, password) : pData;
+
   let out = PERSONAL_TEMPLATE;
   out = replaceAllStr(out, '__P_CSS_BLOCK__', cssBlock);
   out = replaceAllStr(out, '__P_NAME__', name);
   out = replaceAllStr(out, '__P_GENERATED__', pData.generated);
   out = replaceAllStr(out, '__P_TODAY_DISPLAY__', DATA.today_display);
-  out = replaceAllStr(out, '__P_DATA_JSON__', JSON.stringify(pData));
+  out = replaceAllStr(out, '__P_DATA_JSON__', JSON.stringify(payload));
   return out;
 }
 
@@ -638,7 +709,8 @@ async function syncPersonalPages(cfg) {
   for (const name of DATA.employees) {
     const path = `people/${slugify(name)}.html`;
     try {
-      await putFileToGithub(cfg, path, buildPersonalHtml(name), `Személyes oldal frissítve: ${name}`);
+      const html = await buildPersonalHtml(name);
+      await putFileToGithub(cfg, path, html, `Személyes oldal frissítve: ${name}`);
       results.ok++;
     } catch (err) {
       results.fail.push(name + ': ' + err.message);
@@ -742,6 +814,7 @@ function renameEmployee(oldName) {
   });
   if (DATA.weekly[oldName] !== undefined) { DATA.weekly[newName] = DATA.weekly[oldName]; delete DATA.weekly[oldName]; }
   if (DATA.quota[oldName] !== undefined) { DATA.quota[newName] = DATA.quota[oldName]; delete DATA.quota[oldName]; }
+  if (DATA.passwords[oldName] !== undefined) { DATA.passwords[newName] = DATA.passwords[oldName]; delete DATA.passwords[oldName]; }
   renderAll();
 }
 
@@ -985,10 +1058,19 @@ function renderSummary() {
     const nameHtml = editMode
       ? `<span class="editable-name-inline" data-name="${name}" title="Kattints az átnevezéshez"><span class="avatar">${initials(name)}</span>${name} ✎</span>`
       : `<span class="avatar">${initials(name)}</span>${name}`;
+    const pw = DATA.passwords[name] || '';
+    const pwHtml = editMode
+      ? `<input type="text" value="${pw.replace(/"/g, '&quot;')}" data-emp="${name}" class="password-input" placeholder="nincs beállítva" style="width:120px;">
+         <button type="button" class="btn-mini gen-pw-btn" data-emp="${name}" title="Véletlen jelszó generálása">🎲</button>`
+      : (pw ? '<span title="Van beállítva jelszó">🔒 védve</span>' : '<span style="color:var(--muted);">nincs jelszó</span>');
     card.innerHTML = `<h3>${nameHtml}</h3><table>${rowsHtml}</table>
       <div class="quota-box">
         <span class="quota-caption">Keret: ${keretInput}</span>
         <span class="quota-remaining">${hatra}<span class="quota-caption"> nap hátra</span></span>
+      </div>
+      <div class="password-box">
+        <span class="quota-caption">Személyes oldal jelszava:</span>
+        <span class="password-value">${pwHtml}</span>
       </div>`;
     container.appendChild(card);
   });
@@ -1004,6 +1086,24 @@ function renderSummary() {
     });
     document.querySelectorAll('.editable-name-inline').forEach(el => {
       el.addEventListener('click', (e) => { e.stopPropagation(); renameEmployee(el.dataset.name); });
+    });
+    document.querySelectorAll('.password-input').forEach(inp => {
+      inp.addEventListener('change', () => {
+        DATA.passwords[inp.dataset.emp] = inp.value.trim();
+      });
+    });
+    document.querySelectorAll('.gen-pw-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+        let pw = '';
+        const rnd = new Uint32Array(10);
+        crypto.getRandomValues(rnd);
+        for (let i = 0; i < 10; i++) pw += chars[rnd[i] % chars.length];
+        DATA.passwords[btn.dataset.emp] = pw;
+        renderSummary();
+        alert(`Új jelszó ${btn.dataset.emp} részére: ${pw}\n\nJegyezd fel és küldd el neki KÜLÖN csatornán (ne a linkkel együtt)! A Mentés gombra kattintva lép csak életbe.`);
+      });
     });
   }
 }
@@ -1080,6 +1180,20 @@ PERSONAL_TEMPLATE = """<!DOCTYPE html>
 </head>
 <body>
 <script type="application/json" id="app-data">__P_DATA_JSON__</script>
+
+<div id="lockScreen" class="lock-screen" style="display:none;">
+  <div class="lock-card">
+    <h2>🔒 Jelszóval védett oldal</h2>
+    <p>Ez a naptár jelszóval van védve. Kérd el a jelszót a csoportvezetődtől, ha nincs meg.</p>
+    <form id="lockForm" autocomplete="off">
+      <input type="password" id="lockPasswordInput" placeholder="Jelszó" autocomplete="current-password" autofocus>
+      <button type="submit">Belépés</button>
+    </form>
+    <p id="lockError" class="lock-error"></p>
+  </div>
+</div>
+
+<div id="appContent" style="display:none;">
 <header>
   <div class="titles">
     <h1>__P_NAME__ — saját naptár</h1>
@@ -1141,11 +1255,15 @@ PERSONAL_TEMPLATE = """<!DOCTYPE html>
   <div class="year-bar" id="yearBar"></div>
 </div>
 <footer>Ez az oldal csak a te adataidat tartalmazza. Kérdés esetén keresd a csoportvezetőt.</footer>
+</div>
 
 <script>
-const DATA = JSON.parse(document.getElementById('app-data').textContent);
-DATA.employees = [DATA.employee];
-let currentYear = DATA.years.includes(DATA.today_year) ? DATA.today_year : DATA.years[0];
+const RAW = JSON.parse(document.getElementById('app-data').textContent);
+let DATA = null;
+let currentYear = null;
+const monthNames = ['Január','Február','Március','Április','Május','Június','Július','Augusztus','Szeptember','Október','November','December'];
+const huMonthAbbr = ['jan','feb','márc','ápr','máj','jún','júl','aug','szep','okt','nov','dec'];
+let monthSelect = null;
 
 document.querySelectorAll('.tab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -1156,45 +1274,109 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
   });
 });
 
-const yearBar = document.getElementById('yearBar');
-DATA.years.forEach(y => {
-  const btn = document.createElement('button');
-  btn.className = 'year-btn' + (y === currentYear ? ' active' : '');
-  btn.textContent = y;
-  btn.dataset.year = y;
-  btn.addEventListener('click', () => {
-    currentYear = y;
-    document.querySelectorAll('.year-btn').forEach(b => b.classList.toggle('active', parseInt(b.dataset.year) === y));
-    renderAll();
+// --- jelszavas visszafejtés (Web Crypto: PBKDF2 + AES-GCM), ugyanazokkal a
+//     paraméterekkel, mint amivel az admin.html titkosított a Mentéskor ---
+function b64FromBytes_(bytes) { let bin = ''; bytes.forEach(b => { bin += String.fromCharCode(b); }); return btoa(bin); }
+function bytesFromB64_(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+async function decryptWithPassword_(payload, password) {
+  const salt = bytesFromB64_(payload.salt);
+  const iv = bytesFromB64_(payload.iv);
+  const cipherBytes = bytesFromB64_(payload.data);
+  const enc = new TextEncoder();
+  const baseKey = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
+  const key = await crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations: 250000, hash: 'SHA-256' },
+    baseKey, { name: 'AES-GCM', length: 256 }, false, ['decrypt'],
+  );
+  const plainBuf = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, cipherBytes);
+  return JSON.parse(new TextDecoder().decode(plainBuf));
+}
+
+const isEncrypted = RAW && RAW.v === 1 && RAW.salt && RAW.iv && RAW.data;
+
+function startApp(realData) {
+  DATA = realData;
+  DATA.employees = [DATA.employee];
+  document.getElementById('lockScreen').style.display = 'none';
+  document.getElementById('appContent').style.display = '';
+  initApp();
+}
+
+if (isEncrypted) {
+  document.getElementById('lockScreen').style.display = 'flex';
+  document.getElementById('lockForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const pwInput = document.getElementById('lockPasswordInput');
+    const errEl = document.getElementById('lockError');
+    errEl.textContent = '';
+    const submitBtn = e.target.querySelector('button');
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Ellenőrzés...';
+    try {
+      const decrypted = await decryptWithPassword_(RAW, pwInput.value);
+      startApp(decrypted);
+    } catch (err) {
+      errEl.textContent = 'Hibás jelszó. Próbáld újra.';
+      pwInput.value = '';
+      pwInput.focus();
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Belépés';
+    }
   });
-  yearBar.appendChild(btn);
-});
+} else {
+  startApp(RAW);
+}
 
-const legendEl = document.getElementById('legend');
-Object.entries(DATA.codes).forEach(([code, info]) => {
-  if (!code) return;
-  const el = document.createElement('span');
-  el.className = 'chip';
-  el.innerHTML = `<span class="swatch" style="background:${info.color}"></span>${info.label} (${code})`;
-  legendEl.appendChild(el);
-});
-const legendWeeklyEl = document.getElementById('legendWeekly');
-Object.entries(DATA.shift_colors).forEach(([label, color]) => {
-  const el = document.createElement('span');
-  el.className = 'chip';
-  el.innerHTML = `<span class="swatch" style="background:${color}"></span>${label}`;
-  legendWeeklyEl.appendChild(el);
-});
+function initApp() {
+  currentYear = DATA.years.includes(DATA.today_year) ? DATA.today_year : DATA.years[0];
 
-const monthNames = ['Január','Február','Március','Április','Május','Június','Július','Augusztus','Szeptember','Október','November','December'];
-const huMonthAbbr = ['jan','feb','márc','ápr','máj','jún','júl','aug','szep','okt','nov','dec'];
-const monthSelect = document.getElementById('monthSelect');
-monthNames.forEach((name, idx) => {
-  const opt = document.createElement('option');
-  opt.value = idx; opt.textContent = name;
-  monthSelect.appendChild(opt);
-});
-monthSelect.value = huMonthAbbr.indexOf(DATA.today_label.split('.')[0]);
+  const yearBar = document.getElementById('yearBar');
+  DATA.years.forEach(y => {
+    const btn = document.createElement('button');
+    btn.className = 'year-btn' + (y === currentYear ? ' active' : '');
+    btn.textContent = y;
+    btn.dataset.year = y;
+    btn.addEventListener('click', () => {
+      currentYear = y;
+      document.querySelectorAll('.year-btn').forEach(b => b.classList.toggle('active', parseInt(b.dataset.year) === y));
+      renderAll();
+    });
+    yearBar.appendChild(btn);
+  });
+
+  const legendEl = document.getElementById('legend');
+  Object.entries(DATA.codes).forEach(([code, info]) => {
+    if (!code) return;
+    const el = document.createElement('span');
+    el.className = 'chip';
+    el.innerHTML = `<span class="swatch" style="background:${info.color}"></span>${info.label} (${code})`;
+    legendEl.appendChild(el);
+  });
+  const legendWeeklyEl = document.getElementById('legendWeekly');
+  Object.entries(DATA.shift_colors).forEach(([label, color]) => {
+    const el = document.createElement('span');
+    el.className = 'chip';
+    el.innerHTML = `<span class="swatch" style="background:${color}"></span>${label}`;
+    legendWeeklyEl.appendChild(el);
+  });
+
+  monthSelect = document.getElementById('monthSelect');
+  monthNames.forEach((name, idx) => {
+    const opt = document.createElement('option');
+    opt.value = idx; opt.textContent = name;
+    monthSelect.appendChild(opt);
+  });
+  monthSelect.value = huMonthAbbr.indexOf(DATA.today_label.split('.')[0]);
+  monthSelect.addEventListener('change', renderDaily);
+
+  renderAll();
+}
 
 function monthOfIndex(dates, i) { return huMonthAbbr.indexOf(dates[i].split('.')[0]); }
 
@@ -1302,8 +1484,6 @@ function renderSummary() {
 }
 
 function renderAll() { renderDaily(); renderWeekly(); renderExceptions(); renderSummary(); }
-monthSelect.addEventListener('change', renderDaily);
-renderAll();
 </script>
 </body>
 </html>
