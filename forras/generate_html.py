@@ -13,25 +13,27 @@ from openpyxl import load_workbook
 
 SRC = "csapat_nyilvantartas.xlsx"
 OUT = "csapat_naptar.html"
+TODAY = datetime.date(2026, 7, 13)
 
 DAILY_CODES = {
     "":   {"label": "Munkanap", "color": "#ffffff"},
-    "SZ": {"label": "Szabadság", "color": "#ffc000"},
-    "B":  {"label": "Betegszabadság", "color": "#ff6b6b"},
-    "OH": {"label": "Home office", "color": "#9dc3e6"},
-    "UN": {"label": "Ünnepnap", "color": "#c39bd3"},
-    "P":  {"label": "Pihenőnap", "color": "#a9d18e"},
+    "SZ": {"label": "Szabadság", "color": "#f5a623"},
+    "B":  {"label": "Betegszabadság", "color": "#ef5350"},
+    "OH": {"label": "Home office", "color": "#5b9bd5"},
+    "UN": {"label": "Ünnepnap", "color": "#ab7fd1"},
+    "P":  {"label": "Pihenőnap", "color": "#7cb872"},
 }
 SUMMARY_CODES = ["Szabadság", "Betegszabadság", "Home office", "Ünnepnap", "Pihenőnap"]
+QUOTA_LABELS = ["Szabadságkeret", "Hátralévő szabadság"]
 SHIFT_CYCLE = ["Éjjel", "Délután", "Délelőtt"]
 SHIFT_COLORS = {
     "Éjjel": "#5b4b8a",
-    "Délután": "#f4b183",
-    "Délelőtt": "#ffe699",
-    "Szabadság": "#ffc000",
-    "Home office": "#9dc3e6",
-    "Pihenő": "#70ad47",
-    "Egyéb": "#d9d9d9",
+    "Délután": "#ef8f4e",
+    "Délelőtt": "#f0c93b",
+    "Szabadság": "#f5a623",
+    "Home office": "#5b9bd5",
+    "Pihenő": "#4d9a4d",
+    "Egyéb": "#9aa1ab",
 }
 
 wb = load_workbook(SRC, data_only=True)
@@ -48,11 +50,14 @@ for sheet_name in wb.sheetnames:
     ws = wb[sheet_name]
     max_col = ws.max_column
     dates = [ws.cell(row=1, column=c).value for c in range(2, max_col + 1)]
+
     employees = []
     daily = {}
     r = 2
-    while ws.cell(row=r, column=1).value:
+    while True:
         name = ws.cell(row=r, column=1).value
+        if not name or name in ("Jelenlévők száma", "Minimum létszám:"):
+            break
         employees.append(name)
         row_codes = []
         for c in range(2, max_col + 1):
@@ -60,7 +65,19 @@ for sheet_name in wb.sheetnames:
             row_codes.append((v or "").strip().upper())
         daily[name] = row_codes
         r += 1
-    daily_by_year[year] = {"dates": dates, "employees": employees, "daily": daily}
+
+    staff_row = r
+    threshold_row = r + 1
+    staff_counts = [ws.cell(row=staff_row, column=c).value for c in range(2, max_col + 1)]
+    min_staffing = ws.cell(row=threshold_row, column=2).value or 0
+
+    daily_by_year[year] = {
+        "dates": dates,
+        "employees": employees,
+        "daily": daily,
+        "staff_counts": staff_counts,
+        "min_staffing": min_staffing,
+    }
 years.sort()
 
 all_employees = daily_by_year[years[0]]["employees"]
@@ -86,9 +103,7 @@ while ws2.cell(row=r, column=1).value:
     weekly[name] = row_vals
     r += 1
 
-# --- kivétel lista: mindenhol, ahol a tényleges heti bejegyzés eltér az elvárt rotációtól ---
-# (ugyanaz a rotációs logika, mint a build_xlsx.py-ban: TODAY hete = Éjjel)
-TODAY = datetime.date(2026, 7, 13)
+# --- kivétel lista: ahol a tényleges heti bejegyzés eltér az elvárt rotációtól ---
 today_monday = TODAY - datetime.timedelta(days=TODAY.weekday())
 
 exceptions = []
@@ -109,7 +124,7 @@ for name in all_employees:
                 "actual": actual,
             })
 
-# --- éves összesítő beolvasása (a "Éves összesítő" lapról, COUNTIF formulák eredménye) ---
+# --- éves összesítő beolvasása (COUNTIF + szabadságkeret formulák eredménye) ---
 ws3 = wb["Éves összesítő"]
 max_col3 = ws3.max_column
 summary_headers = [ws3.cell(row=1, column=c).value for c in range(2, max_col3 + 1)]
@@ -126,6 +141,11 @@ while ws3.cell(row=r, column=1).value:
     summary[name] = row_by_year
     r += 1
 
+# a mai nap "híd" adatok a JS-hez (napi + heti kiemeléshez)
+today_huabbr = ["jan", "feb", "márc", "ápr", "máj", "jún", "júl", "aug", "szep", "okt", "nov", "dec"][TODAY.month - 1]
+today_label = f"{today_huabbr}.{TODAY.day}"
+today_week_label = f"{today_monday.year}.{today_monday.month}.{today_monday.day}"
+
 data = {
     "generated": datetime.datetime.now().strftime("%Y.%m.%d %H:%M"),
     "years": years,
@@ -139,6 +159,11 @@ data = {
     "exceptions": exceptions,
     "summary": summary,
     "summary_codes": SUMMARY_CODES,
+    "quota_labels": QUOTA_LABELS,
+    "today_year": TODAY.year,
+    "today_label": today_label,
+    "today_week_label": today_week_label,
+    "today_display": f"{TODAY.year}. {['jan.','febr.','márc.','ápr.','máj.','jún.','júl.','aug.','szept.','okt.','nov.','dec.'][TODAY.month-1]} {TODAY.day}.",
 }
 
 HTML_TEMPLATE = """<!DOCTYPE html>
@@ -149,96 +174,171 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <title>Csapat naptár</title>
 <style>
   :root {
-    --border: #e2e2e2;
-    --text: #23272f;
+    --border: #e5e7eb;
+    --text: #1f2430;
     --muted: #6b7280;
-    --accent: #2f5496;
+    --accent: #4f46e5;
+    --accent2: #7c3aed;
+    --bg: #f4f5f9;
+    --card: #ffffff;
+    --radius: 14px;
+    --shadow: 0 1px 3px rgba(17, 24, 39, 0.06), 0 1px 2px rgba(17, 24, 39, 0.08);
   }
   * { box-sizing: border-box; }
   body {
-    font-family: -apple-system, "Segoe UI", Arial, sans-serif;
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     margin: 0;
-    background: #f7f8fa;
+    background: var(--bg);
     color: var(--text);
   }
   header {
-    background: var(--accent);
+    background: linear-gradient(120deg, var(--accent) 0%, var(--accent2) 100%);
     color: white;
-    padding: 20px 28px;
+    padding: 26px 32px 30px;
+    display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: 14px;
   }
-  header h1 { margin: 0 0 4px 0; font-size: 22px; }
-  header p { margin: 0; opacity: 0.85; font-size: 13px; }
-  .wrap { max-width: 1400px; margin: 0 auto; padding: 20px; }
-  .tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+  header .titles h1 { margin: 0 0 6px 0; font-size: 23px; font-weight: 700; letter-spacing: -0.01em; }
+  header .titles p { margin: 0; opacity: 0.88; font-size: 13px; }
+  header .today-badge {
+    background: rgba(255,255,255,0.16); border: 1px solid rgba(255,255,255,0.3);
+    border-radius: 999px; padding: 7px 16px; font-size: 13px; font-weight: 600; backdrop-filter: blur(2px);
+  }
+  .wrap { max-width: 1440px; margin: -14px auto 0; padding: 0 22px 30px; }
+  .tabs {
+    display: flex; gap: 6px; margin-bottom: 16px; background: var(--card); border-radius: 999px;
+    padding: 6px; box-shadow: var(--shadow); width: fit-content;
+  }
   .tab-btn {
-    padding: 8px 16px; border-radius: 8px; border: 1px solid var(--border);
-    background: white; cursor: pointer; font-size: 14px; font-weight: 600;
-    color: var(--muted);
+    display: flex; align-items: center; gap: 7px;
+    padding: 9px 18px; border-radius: 999px; border: none;
+    background: transparent; cursor: pointer; font-size: 13.5px; font-weight: 600;
+    color: var(--muted); transition: all .15s ease;
   }
-  .tab-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
-  .panel { display: none; background: white; border-radius: 10px; border: 1px solid var(--border); padding: 18px; }
+  .tab-btn:hover { background: #f1f1f6; }
+  .tab-btn.active { background: linear-gradient(120deg, var(--accent), var(--accent2)); color: white; box-shadow: 0 2px 6px rgba(79,70,229,.35); }
+  .tab-btn svg { width: 15px; height: 15px; flex-shrink: 0; }
+  .panel { display: none; background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); padding: 20px; }
   .panel.active { display: block; }
-  .controls { display: flex; gap: 12px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+  .controls { display: flex; gap: 14px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
+  .controls label { font-size: 13px; font-weight: 600; color: var(--muted); }
   select, input[type=text] {
-    padding: 7px 10px; border-radius: 6px; border: 1px solid var(--border); font-size: 14px;
+    padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border); font-size: 13.5px;
+    background: #fafafd; outline: none;
   }
-  table { border-collapse: collapse; font-size: 12px; }
+  select:focus, input[type=text]:focus { border-color: var(--accent); background: white; }
+  .btn-icon {
+    display: inline-flex; align-items: center; gap: 6px; margin-left: auto;
+    padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border); background: white;
+    cursor: pointer; font-size: 13px; font-weight: 600; color: var(--text);
+  }
+  .btn-icon:hover { background: #f4f4fb; border-color: var(--accent); }
+  .btn-icon svg { width: 14px; height: 14px; }
+  table { border-collapse: collapse; font-size: 12px; width: 100%; }
   th, td {
-    border: 1px solid var(--border); padding: 3px 4px; text-align: center; white-space: nowrap;
+    border: 1px solid var(--border); padding: 4px 5px; text-align: center; white-space: nowrap;
   }
   th.name-col, td.name-col {
     position: sticky; left: 0; background: white; text-align: left; z-index: 2;
-    min-width: 130px; font-weight: 600; font-size: 13px;
+    min-width: 150px; font-weight: 600; font-size: 12.5px;
   }
-  thead th { position: sticky; top: 0; background: var(--accent); color: white; z-index: 3; font-weight: 500; }
-  thead th.name-col { z-index: 4; }
-  .table-scroll { overflow: auto; max-height: 65vh; border: 1px solid var(--border); border-radius: 8px; }
-  .weekend { background: #f1f1f1; }
-  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 16px; font-size: 13px; }
-  .legend span.swatch { display: inline-block; width: 14px; height: 14px; border-radius: 3px; margin-right: 6px; vertical-align: middle; border: 1px solid #d0d0d0; }
-  footer { text-align: center; color: var(--muted); font-size: 12px; padding: 16px 24px 28px; }
-  td.code-SZ { background: #ffc000; }
-  td.code-B { background: #ff6b6b; color: white; }
-  td.code-OH { background: #9dc3e6; }
-  td.code-UN { background: #c39bd3; }
+  .avatar {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; border-radius: 50%; background: #eef0fb; color: var(--accent);
+    font-size: 10px; font-weight: 700; margin-right: 7px; vertical-align: middle;
+  }
+  thead th { position: sticky; top: 0; background: #383e73; color: white; z-index: 3; font-weight: 600; font-size: 11px; }
+  thead th.name-col { z-index: 4; background: #383e73; }
+  tbody tr:nth-child(even) td:not(.name-col):not([style]) { background: #fafafc; }
+  tbody tr:hover td:not(.name-col) { filter: brightness(0.96); }
+  tbody tr:hover td.name-col { background: #f4f4fb; }
+  .table-scroll { overflow: auto; max-height: 65vh; border: 1px solid var(--border); border-radius: 10px; }
+  .staff-row td { font-weight: 700; background: #eef0f7; }
+  .staff-row td.alert { background: #ef5350 !important; color: white; }
+  .legend { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+  .legend span.chip {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; padding: 5px 12px;
+    border-radius: 999px; background: #f4f4fb; border: 1px solid var(--border);
+  }
+  .legend span.swatch { display: inline-block; width: 11px; height: 11px; border-radius: 50%; border: 1px solid rgba(0,0,0,0.1); }
+  footer { text-align: center; color: var(--muted); font-size: 12px; padding: 20px 24px 30px; }
   .year-bar {
-    display: flex; justify-content: center; gap: 8px; margin: 28px auto 8px; flex-wrap: wrap;
+    display: flex; justify-content: center; gap: 8px; margin: 26px auto 4px; flex-wrap: wrap;
   }
   .year-btn {
-    padding: 8px 20px; border-radius: 20px; border: 1px solid var(--border);
-    background: white; cursor: pointer; font-size: 14px; font-weight: 600; color: var(--muted);
+    padding: 9px 22px; border-radius: 999px; border: 1px solid var(--border);
+    background: white; cursor: pointer; font-size: 13.5px; font-weight: 700; color: var(--muted);
+    box-shadow: var(--shadow); transition: all .15s ease;
   }
-  .year-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
-  .summary-cards { display: flex; flex-wrap: wrap; gap: 12px; }
+  .year-btn:hover { color: var(--accent); }
+  .year-btn.active { background: linear-gradient(120deg, var(--accent), var(--accent2)); color: white; border-color: transparent; }
+  .summary-cards { display: flex; flex-wrap: wrap; gap: 14px; }
   .summary-card {
-    flex: 1 1 180px; border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px;
+    flex: 1 1 210px; border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px;
+    background: linear-gradient(180deg, #fafbff 0%, #ffffff 100%);
   }
-  .summary-card h3 { margin: 0 0 10px 0; font-size: 14px; }
-  .summary-card table { width: 100%; font-size: 13px; }
-  .summary-card td { border: none; padding: 2px 0; text-align: left; }
-  .summary-card td.num { text-align: right; font-weight: 600; }
-  .empty-note { color: var(--muted); font-size: 13px; padding: 12px 0; }
+  .summary-card h3 { margin: 0 0 12px 0; font-size: 14px; display: flex; align-items: center; }
+  .summary-card table { width: 100%; font-size: 12.5px; }
+  .summary-card td { border: none; padding: 3px 0; text-align: left; }
+  .summary-card td.num { text-align: right; font-weight: 700; }
+  .summary-card .quota-box {
+    margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border);
+    display: flex; justify-content: space-between; align-items: baseline;
+  }
+  .summary-card .quota-remaining { font-size: 20px; font-weight: 800; color: var(--accent); }
+  .summary-card .quota-caption { font-size: 11px; color: var(--muted); }
+  .empty-note { color: var(--muted); font-size: 13px; padding: 10px 0 16px; }
+  td.today-col { box-shadow: inset 0 0 0 2px var(--accent); font-weight: 700; }
+  th.today-col { background: #2f2b6b !important; }
+  @media print {
+    header .today-badge, .tabs, .controls, .legend, .year-bar, footer, .btn-icon { display: none !important; }
+    body { background: white; }
+    .wrap { margin: 0; padding: 0; max-width: 100%; }
+    .panel { display: none !important; box-shadow: none; border-radius: 0; padding: 0; }
+    .panel.active { display: block !important; }
+    .table-scroll { max-height: none; overflow: visible; border: none; }
+    header { background: white !important; color: black; padding: 10px 0; }
+    thead th { background: #383e73 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
 </style>
 </head>
 <body>
 <header>
-  <h1>Csapat naptár — szabadság, betegség, munkarend</h1>
-  <p>Utolsó frissítés: __GENERATED__ &nbsp;·&nbsp; csak megtekintésre</p>
+  <div class="titles">
+    <h1>Csapat naptár — szabadság, betegség, munkarend</h1>
+    <p>Utolsó frissítés: __GENERATED__ &nbsp;·&nbsp; csak megtekintésre</p>
+  </div>
+  <div class="today-badge">Ma: __TODAY_DISPLAY__</div>
 </header>
 <div class="wrap">
   <div class="tabs">
-    <button class="tab-btn active" data-tab="daily">Napi jelenlét</button>
-    <button class="tab-btn" data-tab="weekly">Heti beosztás (műszakrend)</button>
-    <button class="tab-btn" data-tab="exceptions">Kivételek</button>
-    <button class="tab-btn" data-tab="summary">Éves összesítő</button>
+    <button class="tab-btn active" data-tab="daily">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>
+      Napi jelenlét
+    </button>
+    <button class="tab-btn" data-tab="weekly">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+      Heti beosztás
+    </button>
+    <button class="tab-btn" data-tab="exceptions">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></svg>
+      Kivételek
+    </button>
+    <button class="tab-btn" data-tab="summary">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 3v18h18M8 17V10M13 17V6M18 17v-4"/></svg>
+      Éves összesítő
+    </button>
   </div>
 
   <div id="daily" class="panel active">
     <div class="controls">
-      <label>Hónap:</label>
+      <label>Hónap</label>
       <select id="monthSelect"></select>
-      <label>Keresés:</label>
+      <label>Keresés</label>
       <input type="text" id="searchDaily" placeholder="Munkatárs neve...">
+      <button class="btn-icon" onclick="window.print()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M6 14h12v8H6z"/></svg>
+        Nyomtatás / PDF
+      </button>
     </div>
     <div class="table-scroll"><table id="dailyTable"></table></div>
     <div class="legend" id="legend"></div>
@@ -246,8 +346,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
   <div id="weekly" class="panel">
     <div class="controls">
-      <label>Keresés:</label>
+      <label>Keresés</label>
       <input type="text" id="searchWeekly" placeholder="Munkatárs neve...">
+      <button class="btn-icon" onclick="window.print()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M6 14h12v8H6z"/></svg>
+        Nyomtatás / PDF
+      </button>
     </div>
     <div class="table-scroll"><table id="weeklyTable"></table></div>
     <div class="legend" id="legendWeekly"></div>
@@ -255,7 +359,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
   <div id="exceptions" class="panel">
     <div class="controls">
-      <label>Keresés:</label>
+      <label>Keresés</label>
       <input type="text" id="searchExc" placeholder="Munkatárs neve...">
     </div>
     <p class="empty-note">Azok a hetek, ahol a tényleges beosztás eltér az automatikus Éjjel→Délután→Délelőtt rotációtól (pl. szabadság, pihenő, home office, egyéb).</p>
@@ -272,7 +376,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
 <script>
 const DATA = __DATA_JSON__;
-let currentYear = DATA.years.includes(2026) ? 2026 : DATA.years[0];
+let currentYear = DATA.years.includes(DATA.today_year) ? DATA.today_year : DATA.years[0];
 
 document.querySelectorAll('.tab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -283,7 +387,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
   });
 });
 
-// --- year bar (alul, mindkét nézetet vezérli) ---
+// --- year bar (alul, minden nézetet vezérel) ---
 const yearBar = document.getElementById('yearBar');
 DATA.years.forEach(y => {
   const btn = document.createElement('button');
@@ -293,10 +397,7 @@ DATA.years.forEach(y => {
   btn.addEventListener('click', () => {
     currentYear = y;
     document.querySelectorAll('.year-btn').forEach(b => b.classList.toggle('active', parseInt(b.dataset.year) === y));
-    renderDaily();
-    renderWeekly();
-    renderExceptions();
-    renderSummary();
+    renderDaily(); renderWeekly(); renderExceptions(); renderSummary();
   });
   yearBar.appendChild(btn);
 });
@@ -306,6 +407,7 @@ const legendEl = document.getElementById('legend');
 Object.entries(DATA.codes).forEach(([code, info]) => {
   if (!code) return;
   const el = document.createElement('span');
+  el.className = 'chip';
   el.innerHTML = `<span class="swatch" style="background:${info.color}"></span>${info.label} (${code})`;
   legendEl.appendChild(el);
 });
@@ -314,6 +416,7 @@ Object.entries(DATA.codes).forEach(([code, info]) => {
 const legendWeeklyEl = document.getElementById('legendWeekly');
 Object.entries(DATA.shift_colors).forEach(([label, color]) => {
   const el = document.createElement('span');
+  el.className = 'chip';
   el.innerHTML = `<span class="swatch" style="background:${color}"></span>${label}`;
   legendWeeklyEl.appendChild(el);
 });
@@ -328,12 +431,14 @@ monthNames.forEach((name, idx) => {
   opt.textContent = name;
   monthSelect.appendChild(opt);
 });
-monthSelect.value = 6; // alapértelmezett: július
+monthSelect.value = new Date(2000, huMonthAbbr.indexOf(DATA.today_label.split('.')[0])).getMonth();
 
 function monthOfIndex(dates, i) {
-  const label = dates[i];
-  const prefix = label.split('.')[0];
-  return huMonthAbbr.indexOf(prefix);
+  return huMonthAbbr.indexOf(dates[i].split('.')[0]);
+}
+
+function initials(name) {
+  return name.replace('Munkatárs ', '').trim();
 }
 
 function renderDaily() {
@@ -344,24 +449,37 @@ function renderDaily() {
   const colIndexes = [];
   yearData.dates.forEach((d, i) => { if (monthOfIndex(yearData.dates, i) === monthIdx) colIndexes.push(i); });
 
+  const isToday = (i) => currentYear === DATA.today_year && yearData.dates[i] === DATA.today_label;
+
   let html = '<thead><tr><th class="name-col">Munkatárs</th>';
   colIndexes.forEach(i => {
     const label = yearData.dates[i].split('.')[1];
-    html += `<th>${label}</th>`;
+    html += `<th class="${isToday(i) ? 'today-col' : ''}">${label}</th>`;
   });
   html += '</tr></thead><tbody>';
 
   yearData.employees.forEach(name => {
     if (search && !name.toLowerCase().includes(search)) return;
-    html += `<tr><td class="name-col">${name}</td>`;
+    html += `<tr><td class="name-col"><span class="avatar">${initials(name)}</span>${name}</td>`;
     colIndexes.forEach(i => {
       const code = (yearData.daily[name] && yearData.daily[name][i]) || '';
       const info = DATA.codes[code];
-      const style = (info && code) ? `style="background:${info.color}${code==='B'?';color:white':''}"` : '';
-      html += `<td ${style} title="${info ? info.label : ''}">${code}</td>`;
+      const bg = (info && code) ? `background:${info.color}${code==='B'?';color:white':''};` : '';
+      const cls = isToday(i) ? 'today-col' : '';
+      html += `<td class="${cls}" style="${bg}" title="${info ? info.label : ''}">${code}</td>`;
     });
     html += '</tr>';
   });
+
+  // jelenlévők száma sor
+  html += `<tr class="staff-row"><td class="name-col">Jelenlévők száma</td>`;
+  colIndexes.forEach(i => {
+    const count = yearData.staff_counts[i];
+    const low = count !== null && count < yearData.min_staffing;
+    html += `<td class="${low ? 'alert' : ''}" title="Minimum létszám: ${yearData.min_staffing}">${count ?? ''}</td>`;
+  });
+  html += '</tr>';
+
   html += '</tbody>';
   document.getElementById('dailyTable').innerHTML = html;
 }
@@ -374,18 +492,20 @@ function renderWeekly() {
   let html = '<thead><tr><th class="name-col">Munkatárs</th>';
   colIndexes.forEach(i => {
     const parts = DATA.week_labels[i].split('.');
-    html += `<th>${parts[1]}.${parts[2]}</th>`;
+    const isToday = DATA.week_labels[i] === DATA.today_week_label;
+    html += `<th class="${isToday ? 'today-col' : ''}">${parts[1]}.${parts[2]}</th>`;
   });
   html += '</tr></thead><tbody>';
   DATA.employees.forEach(name => {
     if (search && !name.toLowerCase().includes(search)) return;
     const vals = DATA.weekly[name] || [];
-    html += `<tr><td class="name-col">${name}</td>`;
+    html += `<tr><td class="name-col"><span class="avatar">${initials(name)}</span>${name}</td>`;
     colIndexes.forEach(i => {
       const v = vals[i] || '';
       const color = DATA.shift_colors[v];
-      const style = color ? `style="background:${color}${v === 'Éjjel' ? ';color:white' : ''}"` : '';
-      html += `<td ${style}>${v}</td>`;
+      const isToday = DATA.week_labels[i] === DATA.today_week_label;
+      const style = color ? `background:${color}${v === 'Éjjel' ? ';color:white' : ''};` : '';
+      html += `<td class="${isToday ? 'today-col' : ''}" style="${style}">${v}</td>`;
     });
     html += '</tr>';
   });
@@ -403,8 +523,8 @@ function renderExceptions() {
   rows.forEach(e => {
     const parts = e.week.split('.');
     const color = DATA.shift_colors[e.actual];
-    const style = color ? `style="background:${color}${e.actual === 'Éjjel' ? ';color:white' : ''}"` : '';
-    html += `<tr><td class="name-col">${e.employee}</td><td>${parts[1]}.${parts[2]}</td><td>${e.expected}</td><td ${style}>${e.actual}</td></tr>`;
+    const style = color ? `background:${color}${e.actual === 'Éjjel' ? ';color:white' : ''};` : '';
+    html += `<tr><td class="name-col">${e.employee}</td><td>${parts[1]}.${parts[2]}</td><td>${e.expected}</td><td style="${style}">${e.actual}</td></tr>`;
   });
   html += '</tbody>';
   document.getElementById('excTable').innerHTML = html;
@@ -421,7 +541,13 @@ function renderSummary() {
     DATA.summary_codes.forEach(code => {
       rowsHtml += `<tr><td>${code}</td><td class="num">${yearData[code] ?? 0}</td></tr>`;
     });
-    card.innerHTML = `<h3>${name}</h3><table>${rowsHtml}</table>`;
+    const keret = yearData[DATA.quota_labels[0]] ?? 0;
+    const hatra = yearData[DATA.quota_labels[1]] ?? 0;
+    card.innerHTML = `<h3><span class="avatar">${initials(name)}</span>${name}</h3><table>${rowsHtml}</table>
+      <div class="quota-box">
+        <span class="quota-caption">Keret: ${keret} nap</span>
+        <span class="quota-remaining">${hatra}<span class="quota-caption"> nap hátra</span></span>
+      </div>`;
     container.appendChild(card);
   });
 }
@@ -440,7 +566,10 @@ renderSummary();
 </html>
 """
 
-html = HTML_TEMPLATE.replace("__GENERATED__", data["generated"]).replace("__DATA_JSON__", json.dumps(data, ensure_ascii=False))
+html = (HTML_TEMPLATE
+        .replace("__GENERATED__", data["generated"])
+        .replace("__TODAY_DISPLAY__", data["today_display"])
+        .replace("__DATA_JSON__", json.dumps(data, ensure_ascii=False)))
 with open(OUT, "w", encoding="utf-8") as f:
     f.write(html)
 print("OK:", OUT)
