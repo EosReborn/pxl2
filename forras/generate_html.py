@@ -754,7 +754,13 @@ document.getElementById('saveBtn').addEventListener('click', () => {
 });
 
 // --- year bar ---
+// FONTOS: mindig ürítjük a konténert feltöltés előtt. A Mentés gomb a jelenlegi (már
+// JS által feltöltött) DOM-ot menti vissza HTML-ként, tehát a következő betöltéskor ez a
+// szkript egy már-feltöltött listára futna rá — appendChild nélküli tisztítás nélkül ez
+// minden szerkesztés+mentés körrel duplázná a bejegyzéseket (ez okozott egy valós hibát
+// az élő oldalon).
 const yearBar = document.getElementById('yearBar');
+yearBar.innerHTML = '';
 DATA.years.forEach(y => {
   const btn = document.createElement('button');
   btn.className = 'year-btn' + (y === currentYear ? ' active' : '');
@@ -770,6 +776,7 @@ DATA.years.forEach(y => {
 
 // --- legend ---
 const legendEl = document.getElementById('legend');
+legendEl.innerHTML = '';
 Object.entries(DATA.codes).forEach(([code, info]) => {
   if (!code) return;
   const el = document.createElement('span');
@@ -778,6 +785,7 @@ Object.entries(DATA.codes).forEach(([code, info]) => {
   legendEl.appendChild(el);
 });
 const legendWeeklyEl = document.getElementById('legendWeekly');
+legendWeeklyEl.innerHTML = '';
 Object.entries(DATA.shift_colors).forEach(([label, color]) => {
   const el = document.createElement('span');
   el.className = 'chip';
@@ -789,6 +797,7 @@ Object.entries(DATA.shift_colors).forEach(([label, color]) => {
 const monthNames = ['Január','Február','Március','Április','Május','Június','Július','Augusztus','Szeptember','Október','November','December'];
 const huMonthAbbr = ['jan','feb','márc','ápr','máj','jún','júl','aug','szep','okt','nov','dec'];
 const monthSelect = document.getElementById('monthSelect');
+monthSelect.innerHTML = '';
 monthNames.forEach((name, idx) => {
   const opt = document.createElement('option');
   opt.value = idx; opt.textContent = name;
@@ -1328,6 +1337,7 @@ function initApp() {
   currentYear = DATA.years.includes(DATA.today_year) ? DATA.today_year : DATA.years[0];
 
   const yearBar = document.getElementById('yearBar');
+  yearBar.innerHTML = '';
   DATA.years.forEach(y => {
     const btn = document.createElement('button');
     btn.className = 'year-btn' + (y === currentYear ? ' active' : '');
@@ -1342,6 +1352,7 @@ function initApp() {
   });
 
   const legendEl = document.getElementById('legend');
+  legendEl.innerHTML = '';
   Object.entries(DATA.codes).forEach(([code, info]) => {
     if (!code) return;
     const el = document.createElement('span');
@@ -1350,6 +1361,7 @@ function initApp() {
     legendEl.appendChild(el);
   });
   const legendWeeklyEl = document.getElementById('legendWeekly');
+  legendWeeklyEl.innerHTML = '';
   Object.entries(DATA.shift_colors).forEach(([label, color]) => {
     const el = document.createElement('span');
     el.className = 'chip';
@@ -1358,6 +1370,7 @@ function initApp() {
   });
 
   monthSelect = document.getElementById('monthSelect');
+  monthSelect.innerHTML = '';
   monthNames.forEach((name, idx) => {
     const opt = document.createElement('option');
     opt.value = idx; opt.textContent = name;
