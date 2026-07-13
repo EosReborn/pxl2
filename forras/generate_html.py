@@ -455,6 +455,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 const DATA = JSON.parse(document.getElementById('app-data').textContent);
 let currentYear = DATA.years.includes(DATA.today_year) ? DATA.today_year : DATA.years[0];
 let editMode = false;
+const PERSONAL_TEMPLATE = __PERSONAL_TEMPLATE_JSON__;
 
 document.querySelectorAll('.tab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -556,32 +557,104 @@ function downloadFile(html) {
   a.click();
   a.remove();
 }
+function slugify(name) {
+  const repl = { 'á':'a','é':'e','í':'i','ó':'o','ö':'o','ő':'o','ú':'u','ü':'u','ű':'u' };
+  let s = name.toLowerCase();
+  Object.entries(repl).forEach(([k, v]) => { s = s.split(k).join(v); });
+  s = s.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return s;
+}
+function replaceAllStr(str, search, val) { return str.split(search).join(val); }
+
+function buildPersonalHtml(name) {
+  const cssBlock = document.querySelector('style').textContent;
+  const pDaily = {};
+  DATA.years.forEach(y => {
+    const yd = DATA.daily_by_year[y];
+    pDaily[y] = { dates: yd.dates, daily: { [name]: yd.daily[name] } };
+  });
+  const pData = {
+    generated: DATA.generated || new Date().toLocaleString('hu-HU'),
+    years: DATA.years,
+    employee: name,
+    daily_by_year: pDaily,
+    week_labels: DATA.week_labels,
+    week_years: DATA.week_years,
+    weekly: { [name]: DATA.weekly[name] || [] },
+    codes: DATA.codes,
+    summary_codes: DATA.summary_codes,
+    shift_colors: DATA.shift_colors,
+    quota: { [name]: (DATA.quota[name] || {}) },
+    today_year: DATA.today_year,
+    today_label: DATA.today_label,
+    today_week_label: DATA.today_week_label,
+    today_display: DATA.today_display,
+  };
+  let out = PERSONAL_TEMPLATE;
+  out = replaceAllStr(out, '__P_CSS_BLOCK__', cssBlock);
+  out = replaceAllStr(out, '__P_NAME__', name);
+  out = replaceAllStr(out, '__P_GENERATED__', pData.generated);
+  out = replaceAllStr(out, '__P_TODAY_DISPLAY__', DATA.today_display);
+  out = replaceAllStr(out, '__P_DATA_JSON__', JSON.stringify(pData));
+  return out;
+}
+
+// --- generikus GET-sha + PUT segédfüggvény (admin.html és people/*.html mentéséhez is) ---
+async function putFileToGithub(cfg, path, content, message) {
+  const apiBase = `https://api.github.com/repos/${cfg.owner}/${cfg.repo}/contents/${path}`;
+  const headers = { Authorization: `Bearer ${cfg.token}`, Accept: 'application/vnd.github+json' };
+  const getResp = await fetch(`${apiBase}?ref=${encodeURIComponent(cfg.branch)}&t=${Date.now()}`, { headers, cache: 'no-store' });
+  let sha;
+  if (getResp.ok) {
+    sha = (await getResp.json()).sha;
+  } else if (getResp.status !== 404) {
+    throw new Error(`Nem sikerült lekérni a(z) ${path} fájlt (${getResp.status}).`);
+  }
+  const contentB64 = btoa(unescape(encodeURIComponent(content)));
+  const body = { message, content: contentB64, branch: cfg.branch };
+  if (sha) body.sha = sha;
+  const putResp = await fetch(apiBase, {
+    method: 'PUT',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!putResp.ok) {
+    const errJson = await putResp.json().catch(() => ({}));
+    if (putResp.status === 409) {
+      throw new Error(`A(z) ${path} időközben megváltozott a GitHub-on. Frissítsd az oldalt (Cmd/Ctrl+Shift+R), és próbáld újra.`);
+    }
+    throw new Error(`Mentés sikertelen (${path}, ${putResp.status}): ${errJson.message || 'ismeretlen hiba'}`);
+  }
+}
+
+async function syncPersonalPages(cfg) {
+  const results = { ok: 0, fail: [] };
+  for (const name of DATA.employees) {
+    const path = `people/${slugify(name)}.html`;
+    try {
+      await putFileToGithub(cfg, path, buildPersonalHtml(name), `Személyes oldal frissítve: ${name}`);
+      results.ok++;
+    } catch (err) {
+      results.fail.push(name + ': ' + err.message);
+    }
+  }
+  return results;
+}
+
 async function publishToGithub(cfg) {
   const html = currentHtml();
-  const apiBase = `https://api.github.com/repos/${cfg.owner}/${cfg.repo}/contents/${cfg.path}`;
-  const headers = { Authorization: `Bearer ${cfg.token}`, Accept: 'application/vnd.github+json' };
   showToast('Mentés a GitHub-ra...', 60000);
   try {
-    const getResp = await fetch(`${apiBase}?ref=${encodeURIComponent(cfg.branch)}`, { headers });
-    if (!getResp.ok) throw new Error(`Nem sikerült lekérni a jelenlegi fájlt (${getResp.status}). Ellenőrizd a beállításokat.`);
-    const getJson = await getResp.json();
-    const contentB64 = btoa(unescape(encodeURIComponent(html)));
-    const putResp = await fetch(apiBase, {
-      method: 'PUT',
-      headers: { ...headers, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        message: 'Csapat naptár frissítve – ' + new Date().toLocaleString('hu-HU'),
-        content: contentB64,
-        sha: getJson.sha,
-        branch: cfg.branch,
-      }),
-    });
+    await putFileToGithub(cfg, cfg.path, html, 'Csapat naptár frissítve – ' + new Date().toLocaleString('hu-HU'));
     document.querySelectorAll('.toast').forEach(t => t.remove());
-    if (!putResp.ok) {
-      const errJson = await putResp.json().catch(() => ({}));
-      throw new Error(`Mentés sikertelen (${putResp.status}): ${errJson.message || 'ismeretlen hiba'}`);
+    showToast(`Admin mentve, személyes oldalak szinkronizálása (${DATA.employees.length} db)...`, 60000);
+    const results = await syncPersonalPages(cfg);
+    document.querySelectorAll('.toast').forEach(t => t.remove());
+    if (results.fail.length === 0) {
+      showToast(`Mentve! Az admin és mind a ${results.ok} személyes oldal frissült. Az élő oldal 1-2 percen belül tükrözi.`);
+    } else {
+      alert(`Az admin mentve, de ${results.fail.length} személyes oldal szinkronizálása nem sikerült:\\n` + results.fail.join('\\n'));
     }
-    showToast('Mentve! Az élő oldal 1-2 percen belül frissül.');
   } catch (err) {
     document.querySelectorAll('.toast').forEach(t => t.remove());
     alert('Hiba történt a GitHub mentés közben:\\n' + err.message + '\\n\\nLetöltöm helyette a fájlt, hogy kézzel is fel tudd tölteni.');
@@ -909,13 +982,9 @@ renderAll();
 </html>
 """
 
-admin_html = (HTML_TEMPLATE
-        .replace("__GENERATED__", data["generated"])
-        .replace("__TODAY_DISPLAY__", data["today_display"])
-        .replace("__DATA_JSON__", json.dumps(data, ensure_ascii=False)))
-with open(OUT, "w", encoding="utf-8") as f:
-    f.write(admin_html)
-print("OK:", OUT, "(teljes nézet — csak a megbízott adminoknak küldd el a linkjét, ne linkeld be sehonnan)")
+# NOTE: admin_html készítése lentebb történik, miután a PERSONAL_TEMPLATE, CSS_BLOCK és
+# slugify is definiálva van (az admin oldal saját JS-e beágyazva tartalmazza a
+# PERSONAL_TEMPLATE-et, hogy Mentéskor a people/*.html fájlokat is szinkronizálni tudja).
 
 # ---------------------------------------------------------------- publikus főoldal (nincs benne adat)
 INDEX_TEMPLATE = """<!DOCTYPE html>
@@ -962,18 +1031,18 @@ PERSONAL_TEMPLATE = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>__NAME__ — saját naptár</title>
-<style>__CSS_BLOCK__</style>
+<title>__P_NAME__ — saját naptár</title>
+<style>__P_CSS_BLOCK__</style>
 </head>
 <body>
-<script type="application/json" id="app-data">__DATA_JSON__</script>
+<script type="application/json" id="app-data">__P_DATA_JSON__</script>
 <header>
   <div class="titles">
-    <h1>__NAME__ — saját naptár</h1>
-    <p>Utolsó frissítés: __GENERATED__ &nbsp;·&nbsp; csak a saját adataid</p>
+    <h1>__P_NAME__ — saját naptár</h1>
+    <p>Utolsó frissítés: __P_GENERATED__ &nbsp;·&nbsp; csak a saját adataid</p>
   </div>
   <div class="header-actions">
-    <div class="today-badge">Ma: __TODAY_DISPLAY__</div>
+    <div class="today-badge">Ma: __P_TODAY_DISPLAY__</div>
   </div>
 </header>
 <div class="wrap">
@@ -1183,6 +1252,30 @@ renderAll();
 </html>
 """
 
+# ---------------------------------------------------------------- admin.html végleges legyártása
+# (itt már elérhető a PERSONAL_TEMPLATE és a slugify, ezeket beágyazzuk az admin oldal JS-ébe,
+# hogy a Mentés gomb a people/*.html fájlokat is tudja frissíteni a GitHub-on)
+# FONTOS: a __DATA_JSON__-t (admin saját adata) előbb kell cserélni, mint a
+# __PERSONAL_TEMPLATE_JSON__-t, mert a beágyazott PERSONAL_TEMPLATE szövege is tartalmazza
+# a "__DATA_JSON__" szót (saját, JS-oldali cseréhez) — ha fordítva csinálnánk, az utólagos
+# __DATA_JSON__ csere véletlenül a beágyazott sablonban lévő placeholdert is felülírná.
+# A PERSONAL_TEMPLATE saját <script>/</script> tageket tartalmaz (a people/ oldalak
+# JS-e). Ha ezt szó szerint (escapelés nélkül) ágyaznánk be egy JSON stringként az
+# admin.html <script> blokkjába, a böngésző HTML-parsere a beágyazott "</script>"
+# szövegnél lezárná az admin oldal script blokkját (a HTML tokenizer erre a
+# karaktersorozatra figyel, függetlenül attól, hogy az JS stringen belül van-e) — ezért
+# minden "</" előfordulást "<\\/"-re cserélünk a beágyazott JSON szövegben.
+personal_template_json = json.dumps(PERSONAL_TEMPLATE, ensure_ascii=False).replace("</", "<\\/")
+
+admin_html = (HTML_TEMPLATE
+        .replace("__GENERATED__", data["generated"])
+        .replace("__TODAY_DISPLAY__", data["today_display"])
+        .replace("__DATA_JSON__", json.dumps(data, ensure_ascii=False))
+        .replace("__PERSONAL_TEMPLATE_JSON__", personal_template_json))
+with open(OUT, "w", encoding="utf-8") as f:
+    f.write(admin_html)
+print("OK:", OUT, "(teljes nézet — csak a megbízott adminoknak küldd el a linkjét, ne linkeld be sehonnan)")
+
 os.makedirs(PEOPLE_DIR, exist_ok=True)
 for name in all_employees:
     p_daily_by_year = {
@@ -1207,14 +1300,13 @@ for name in all_employees:
         "today_display": data["today_display"],
     }
     p_html = (PERSONAL_TEMPLATE
-              .replace("__CSS_BLOCK__", CSS_BLOCK)
-              .replace("__NAME__", name)
-              .replace("__GENERATED__", p_data["generated"])
-              .replace("__TODAY_DISPLAY__", p_data["today_display"])
-              .replace("__DATA_JSON__", json.dumps(p_data, ensure_ascii=False)))
+              .replace("__P_CSS_BLOCK__", CSS_BLOCK)
+              .replace("__P_NAME__", name)
+              .replace("__P_GENERATED__", p_data["generated"])
+              .replace("__P_TODAY_DISPLAY__", p_data["today_display"])
+              .replace("__P_DATA_JSON__", json.dumps(p_data, ensure_ascii=False)))
     fname = os.path.join(PEOPLE_DIR, f"{slugify(name)}.html")
     with open(fname, "w", encoding="utf-8") as f:
         f.write(p_html)
 
 print(f"OK: {len(all_employees)} személyes oldal a '{PEOPLE_DIR}/' mappában (mindegyik csak a saját adatát tartalmazza)")
-print("OK:", OUT)
