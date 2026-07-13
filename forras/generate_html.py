@@ -4,24 +4,27 @@ weboldalt.
 
 Ez a script csak az ALAP felépítéshez kell (új év hozzáadása, ünnepnapok
 újraszámolása, teljes újraindítás). A napi haszálathoz NEM kell többé Excel
-vagy ez a script: a kész weboldalon van egy jelszóval védett "Szerkesztés"
-mód, ahol közvetlenül a böngészőben lehet módosítani az adatokat, majd a
-"Mentés" gombbal letölthető az új, önálló index.html (ezt kell feltölteni
-GitHub-ra).
+vagy ez a script: a kész weboldalon van egy "Szerkesztés" mód, ahol
+közvetlenül a böngészőben lehet módosítani az adatokat. A "Mentés" gomb —
+ha egyszer be van állítva egy GitHub personal access token — közvetlenül
+visszaírja a módosítást a GitHub repóba (nincs letöltés/feltöltés). Beállítás
+nélkül a Mentés gomb letölti az új, önálló index.html-t (kézi feltöltéshez).
 
 Futtatás:  python3 generate_html.py
 Bemenet:   csapat_nyilvantartas.xlsx  (a kiinduló adat)
 Kimenet:   csapat_naptar.html        (ezt kell index.html néven feltölteni)
 """
 import json
+import os
 import re
 import datetime
 from openpyxl import load_workbook
 
 SRC = "csapat_nyilvantartas.xlsx"
-OUT = "csapat_naptar.html"
+OUT = "admin.html"  # teljes nézet — NEM index.html, csak akinek elküldöd a linket
+INDEX_OUT = "index.html"  # nyilvános főoldal — nem tartalmaz személyes adatot
+PEOPLE_DIR = "people"  # egy fájl / dolgozó, csak a saját adatával
 TODAY = datetime.date(2026, 7, 13)
-EDIT_PASSWORD = "vezeto2026"  # ezt itt tudod megváltoztatni
 
 DAILY_CODES = {
     "":   {"label": "Munkanap", "color": "#ffffff"},
@@ -288,6 +291,35 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   }
   .picker button:hover { background: #f4f4fb; }
   .picker .dot { width: 10px; height: 10px; border-radius: 50%; border: 1px solid rgba(0,0,0,.1); flex-shrink: 0; }
+  .modal-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(20,20,30,.5); z-index: 100;
+    align-items: center; justify-content: center;
+  }
+  .modal-overlay.show { display: flex; }
+  .modal {
+    background: white; border-radius: 14px; padding: 24px 26px; width: 380px; max-width: 92vw;
+    box-shadow: 0 20px 50px rgba(0,0,0,.25);
+  }
+  .modal h3 { margin: 0 0 6px 0; font-size: 16px; }
+  .modal p.hint { font-size: 12px; color: var(--muted); margin: 0 0 16px 0; line-height: 1.5; }
+  .modal label { display: block; font-size: 12.5px; font-weight: 600; color: var(--muted); margin: 10px 0 4px; }
+  .modal input { width: 100%; padding: 9px 11px; border-radius: 8px; border: 1px solid var(--border); font-size: 13.5px; }
+  .modal .modal-actions { display: flex; justify-content: space-between; align-items: center; margin-top: 20px; gap: 10px; }
+  .modal .modal-actions .right { display: flex; gap: 8px; }
+  .modal button.primary {
+    background: linear-gradient(120deg, var(--accent), var(--accent2)); color: white; border: none;
+    padding: 9px 18px; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 13px;
+  }
+  .modal button.secondary {
+    background: #f1f1f6; color: var(--text); border: none; padding: 9px 16px; border-radius: 8px;
+    font-weight: 600; cursor: pointer; font-size: 13px;
+  }
+  .modal button.link { background: none; border: none; color: #b3261e; font-size: 12px; cursor: pointer; padding: 4px 0; text-decoration: underline; }
+  .toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); z-index: 200;
+    background: #1f2430; color: white; padding: 12px 20px; border-radius: 10px; font-size: 13.5px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.3); max-width: 90vw; text-align: center;
+  }
   @media print {
     .header-actions, .tabs, .controls, .legend, .year-bar, footer, .btn-icon, .edit-banner { display: none !important; }
     body { background: white; }
@@ -317,10 +349,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>
       Mentés
     </button>
+    <button class="hdr-btn" id="settingsBtn" title="GitHub mentés beállítása">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
+    </button>
   </div>
 </header>
 <div class="wrap">
-  <div class="edit-banner" id="editBanner">Szerkesztés mód bekapcsolva — kattints egy cellára a módosításhoz. Ha végeztél, kattints a "Mentés" gombra, és töltsd fel az így letöltött fájlt (index.html néven) a GitHub repóba.</div>
+  <div class="edit-banner" id="editBanner">Szerkesztés mód bekapcsolva — kattints egy cellára a módosításhoz. A "Mentés" gomb közvetlenül visszaírja a változást a GitHub repóba.</div>
 
   <div class="tabs">
     <button class="tab-btn active" data-tab="daily">
@@ -386,11 +421,34 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
   <div class="year-bar" id="yearBar"></div>
 </div>
-<footer>A jobb felső "Szerkesztés" móddal közvetlenül itt módosíthatod az adatokat, majd "Mentés"-sel töltsd le és töltsd fel a GitHub repóba.</footer>
+<footer>A jobb felső "Szerkesztés" móddal közvetlenül itt módosíthatod az adatokat, a "Mentés" pedig egy kattintással visszaírja a GitHub repóba.</footer>
+
+<div class="modal-overlay" id="settingsOverlay">
+  <div class="modal">
+    <h3>GitHub mentés beállítása</h3>
+    <p class="hint">Ezt csak egyszer kell beállítanod (ezen a gépen, ebben a böngészőben marad meg). A tokent a GitHub-on hozod létre: Settings → Developer settings → Fine-grained tokens → csak erre a repóra, "Contents: Read and write" jogosultsággal.</p>
+    <label>GitHub felhasználó / szervezet</label>
+    <input id="cfgOwner" placeholder="pl. kochnorbert">
+    <label>Repó neve</label>
+    <input id="cfgRepo" placeholder="pl. csapat-naptar">
+    <label>Branch</label>
+    <input id="cfgBranch" placeholder="main" value="main">
+    <label>Fájl elérési útja a repóban</label>
+    <input id="cfgPath" placeholder="index.html" value="index.html">
+    <label>Personal access token</label>
+    <input id="cfgToken" type="password" placeholder="ghp_...">
+    <div class="modal-actions">
+      <button class="link" id="cfgClear">Kijelentkezés / adatok törlése</button>
+      <div class="right">
+        <button class="secondary" id="cfgCancel">Mégse</button>
+        <button class="primary" id="cfgSave">Mentés</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <script>
 const DATA = JSON.parse(document.getElementById('app-data').textContent);
-const EDIT_PASSWORD = __EDIT_PASSWORD_JSON__;
 let currentYear = DATA.years.includes(DATA.today_year) ? DATA.today_year : DATA.years[0];
 let editMode = false;
 
@@ -404,27 +462,84 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
   });
 });
 
+// --- GitHub mentési beállítások (csak ebben a böngészőben tárolva) ---
+const CFG_KEY = 'csapatNaptarGithubCfg';
+function loadCfg() { try { return JSON.parse(localStorage.getItem(CFG_KEY) || 'null'); } catch (e) { return null; } }
+function saveCfg(cfg) { localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); }
+function clearCfg() { localStorage.removeItem(CFG_KEY); }
+function hasCfg() { const c = loadCfg(); return !!(c && c.owner && c.repo && c.token); }
+
+function showToast(msg, ms) {
+  const t = document.createElement('div');
+  t.className = 'toast';
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), ms || 4500);
+}
+
+let pendingEnableEdit = false;
+function openSettings(enableEditAfter) {
+  pendingEnableEdit = !!enableEditAfter;
+  const c = loadCfg() || {};
+  document.getElementById('cfgOwner').value = c.owner || '';
+  document.getElementById('cfgRepo').value = c.repo || '';
+  document.getElementById('cfgBranch').value = c.branch || 'main';
+  document.getElementById('cfgPath').value = c.path || 'index.html';
+  document.getElementById('cfgToken').value = c.token || '';
+  document.getElementById('settingsOverlay').classList.add('show');
+}
+function closeSettings() { document.getElementById('settingsOverlay').classList.remove('show'); }
+
+document.getElementById('settingsBtn').addEventListener('click', () => openSettings(false));
+document.getElementById('cfgCancel').addEventListener('click', closeSettings);
+document.getElementById('settingsOverlay').addEventListener('click', (e) => { if (e.target.id === 'settingsOverlay') closeSettings(); });
+document.getElementById('cfgClear').addEventListener('click', () => {
+  clearCfg();
+  editMode = false;
+  updateEditUI();
+  closeSettings();
+  showToast('Törölve — a beállítások és a token eltávolítva ebből a böngészőből.');
+});
+document.getElementById('cfgSave').addEventListener('click', () => {
+  const cfg = {
+    owner: document.getElementById('cfgOwner').value.trim(),
+    repo: document.getElementById('cfgRepo').value.trim(),
+    branch: document.getElementById('cfgBranch').value.trim() || 'main',
+    path: document.getElementById('cfgPath').value.trim() || 'index.html',
+    token: document.getElementById('cfgToken').value.trim(),
+  };
+  if (!cfg.owner || !cfg.repo || !cfg.token) { alert('Töltsd ki a felhasználót, a repó nevét és a tokent.'); return; }
+  saveCfg(cfg);
+  closeSettings();
+  if (pendingEnableEdit) { editMode = true; updateEditUI(); }
+  showToast('Beállítás mentve ebben a böngészőben.');
+});
+
 // --- edit mode toggle ---
-document.getElementById('editToggleBtn').addEventListener('click', () => {
-  if (!editMode) {
-    const pw = prompt('Add meg a szerkesztői jelszót:');
-    if (pw !== EDIT_PASSWORD) { if (pw !== null) alert('Hibás jelszó.'); return; }
-    editMode = true;
-  } else {
-    editMode = false;
-  }
+function updateEditUI() {
   document.getElementById('editToggleBtn').classList.toggle('on', editMode);
   document.getElementById('editBanner').classList.toggle('show', editMode);
   document.getElementById('modeLabel').textContent = editMode ? 'szerkesztés mód' : 'csak megtekintésre';
   document.getElementById('minStaffLabel').style.display = editMode ? '' : 'none';
   document.getElementById('minStaffInput').style.display = editMode ? '' : 'none';
   renderAll();
+}
+document.getElementById('editToggleBtn').addEventListener('click', () => {
+  if (!editMode) {
+    if (!hasCfg()) { openSettings(true); return; }
+    editMode = true;
+  } else {
+    editMode = false;
+  }
+  updateEditUI();
 });
 
-// --- mentés: friss adat visszaírása a #app-data tag-be, majd a teljes oldal letöltése ---
-document.getElementById('saveBtn').addEventListener('click', () => {
+// --- mentés: ha van GitHub beállítás, közvetlenül a repóba írja; ha nincs, letölti a fájlt ---
+function currentHtml() {
   document.getElementById('app-data').textContent = JSON.stringify(DATA);
-  const html = '<!DOCTYPE html>\\n' + document.documentElement.outerHTML;
+  return '<!DOCTYPE html>\\n' + document.documentElement.outerHTML;
+}
+function downloadFile(html) {
   const blob = new Blob([html], { type: 'text/html' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -432,6 +547,46 @@ document.getElementById('saveBtn').addEventListener('click', () => {
   document.body.appendChild(a);
   a.click();
   a.remove();
+}
+async function publishToGithub(cfg) {
+  const html = currentHtml();
+  const apiBase = `https://api.github.com/repos/${cfg.owner}/${cfg.repo}/contents/${cfg.path}`;
+  const headers = { Authorization: `Bearer ${cfg.token}`, Accept: 'application/vnd.github+json' };
+  showToast('Mentés a GitHub-ra...', 60000);
+  try {
+    const getResp = await fetch(`${apiBase}?ref=${encodeURIComponent(cfg.branch)}`, { headers });
+    if (!getResp.ok) throw new Error(`Nem sikerült lekérni a jelenlegi fájlt (${getResp.status}). Ellenőrizd a beállításokat.`);
+    const getJson = await getResp.json();
+    const contentB64 = btoa(unescape(encodeURIComponent(html)));
+    const putResp = await fetch(apiBase, {
+      method: 'PUT',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: 'Csapat naptár frissítve – ' + new Date().toLocaleString('hu-HU'),
+        content: contentB64,
+        sha: getJson.sha,
+        branch: cfg.branch,
+      }),
+    });
+    document.querySelectorAll('.toast').forEach(t => t.remove());
+    if (!putResp.ok) {
+      const errJson = await putResp.json().catch(() => ({}));
+      throw new Error(`Mentés sikertelen (${putResp.status}): ${errJson.message || 'ismeretlen hiba'}`);
+    }
+    showToast('Mentve! Az élő oldal 1-2 percen belül frissül.');
+  } catch (err) {
+    document.querySelectorAll('.toast').forEach(t => t.remove());
+    alert('Hiba történt a GitHub mentés közben:\\n' + err.message + '\\n\\nLetöltöm helyette a fájlt, hogy kézzel is fel tudd tölteni.');
+    downloadFile(html);
+  }
+}
+document.getElementById('saveBtn').addEventListener('click', () => {
+  const cfg = loadCfg();
+  if (cfg && cfg.token) {
+    publishToGithub(cfg);
+  } else {
+    downloadFile(currentHtml());
+  }
 });
 
 // --- year bar ---
@@ -709,12 +864,312 @@ renderAll();
 </html>
 """
 
-html = (HTML_TEMPLATE
+admin_html = (HTML_TEMPLATE
         .replace("__GENERATED__", data["generated"])
         .replace("__TODAY_DISPLAY__", data["today_display"])
-        .replace("__EDIT_PASSWORD_JSON__", json.dumps(EDIT_PASSWORD))
         .replace("__DATA_JSON__", json.dumps(data, ensure_ascii=False)))
 with open(OUT, "w", encoding="utf-8") as f:
-    f.write(html)
+    f.write(admin_html)
+print("OK:", OUT, "(teljes nézet — csak a megbízott adminoknak küldd el a linkjét, ne linkeld be sehonnan)")
+
+# ---------------------------------------------------------------- publikus főoldal (nincs benne adat)
+INDEX_TEMPLATE = """<!DOCTYPE html>
+<html lang="hu">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Csapat naptár</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: linear-gradient(120deg, #4f46e5 0%, #7c3aed 100%); color: white; margin: 0;
+    min-height: 100vh; display: flex; align-items: center; justify-content: center; text-align: center; }
+  .box { max-width: 420px; padding: 40px; }
+  h1 { font-size: 22px; margin-bottom: 10px; }
+  p { opacity: 0.85; font-size: 14px; line-height: 1.6; }
+</style>
+</head>
+<body>
+  <div class="box">
+    <h1>Csapat naptár</h1>
+    <p>Ez az oldal nem tartalmaz adatot. A saját naptáradat a tőled kapott személyes linken
+    éred el.</p>
+  </div>
+</body>
+</html>
+"""
+with open(INDEX_OUT, "w", encoding="utf-8") as f:
+    f.write(INDEX_TEMPLATE)
+print("OK:", INDEX_OUT, "(publikus, adatmentes főoldal)")
+
+# ---------------------------------------------------------------- személyes, szűkített oldalak
+def slugify(name):
+    s = name.lower()
+    repl = {"á": "a", "é": "e", "í": "i", "ó": "o", "ö": "o", "ő": "o", "ú": "u", "ü": "u", "ű": "u"}
+    for k, v in repl.items():
+        s = s.replace(k, v)
+    s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
+    return s
+
+CSS_BLOCK = re.search(r"<style>(.*?)</style>", HTML_TEMPLATE, re.S).group(1)
+
+PERSONAL_TEMPLATE = """<!DOCTYPE html>
+<html lang="hu">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>__NAME__ — saját naptár</title>
+<style>__CSS_BLOCK__</style>
+</head>
+<body>
+<script type="application/json" id="app-data">__DATA_JSON__</script>
+<header>
+  <div class="titles">
+    <h1>__NAME__ — saját naptár</h1>
+    <p>Utolsó frissítés: __GENERATED__ &nbsp;·&nbsp; csak a saját adataid</p>
+  </div>
+  <div class="header-actions">
+    <div class="today-badge">Ma: __TODAY_DISPLAY__</div>
+  </div>
+</header>
+<div class="wrap">
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="daily">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>
+      Napi jelenlét
+    </button>
+    <button class="tab-btn" data-tab="weekly">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+      Heti beosztás
+    </button>
+    <button class="tab-btn" data-tab="exceptions">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></svg>
+      Kivételek
+    </button>
+    <button class="tab-btn" data-tab="summary">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 3v18h18M8 17V10M13 17V6M18 17v-4"/></svg>
+      Éves összesítő
+    </button>
+  </div>
+
+  <div id="daily" class="panel active">
+    <div class="controls">
+      <label>Hónap</label>
+      <select id="monthSelect"></select>
+      <button class="btn-icon" onclick="window.print()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M6 14h12v8H6z"/></svg>
+        Nyomtatás / PDF
+      </button>
+    </div>
+    <div class="table-scroll"><table id="dailyTable"></table></div>
+    <div class="legend" id="legend"></div>
+  </div>
+
+  <div id="weekly" class="panel">
+    <div class="table-scroll"><table id="weeklyTable"></table></div>
+    <div class="legend" id="legendWeekly"></div>
+  </div>
+
+  <div id="exceptions" class="panel">
+    <p class="empty-note">Azok a hetek, ahol a te beosztásod eltér az automatikus Éjjel→Délután→Délelőtt rotációtól.</p>
+    <div class="table-scroll"><table id="excTable"></table></div>
+  </div>
+
+  <div id="summary" class="panel">
+    <div class="summary-cards" id="summaryCards"></div>
+  </div>
+
+  <div class="year-bar" id="yearBar"></div>
+</div>
+<footer>Ez az oldal csak a te adataidat tartalmazza. Kérdés esetén keresd a csoportvezetőt.</footer>
+
+<script>
+const DATA = JSON.parse(document.getElementById('app-data').textContent);
+DATA.employees = [DATA.employee];
+let currentYear = DATA.years.includes(DATA.today_year) ? DATA.today_year : DATA.years[0];
+
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById(btn.dataset.tab).classList.add('active');
+  });
+});
+
+const yearBar = document.getElementById('yearBar');
+DATA.years.forEach(y => {
+  const btn = document.createElement('button');
+  btn.className = 'year-btn' + (y === currentYear ? ' active' : '');
+  btn.textContent = y;
+  btn.dataset.year = y;
+  btn.addEventListener('click', () => {
+    currentYear = y;
+    document.querySelectorAll('.year-btn').forEach(b => b.classList.toggle('active', parseInt(b.dataset.year) === y));
+    renderAll();
+  });
+  yearBar.appendChild(btn);
+});
+
+const legendEl = document.getElementById('legend');
+Object.entries(DATA.codes).forEach(([code, info]) => {
+  if (!code) return;
+  const el = document.createElement('span');
+  el.className = 'chip';
+  el.innerHTML = `<span class="swatch" style="background:${info.color}"></span>${info.label} (${code})`;
+  legendEl.appendChild(el);
+});
+const legendWeeklyEl = document.getElementById('legendWeekly');
+Object.entries(DATA.shift_colors).forEach(([label, color]) => {
+  const el = document.createElement('span');
+  el.className = 'chip';
+  el.innerHTML = `<span class="swatch" style="background:${color}"></span>${label}`;
+  legendWeeklyEl.appendChild(el);
+});
+
+const monthNames = ['Január','Február','Március','Április','Május','Június','Július','Augusztus','Szeptember','Október','November','December'];
+const huMonthAbbr = ['jan','feb','márc','ápr','máj','jún','júl','aug','szep','okt','nov','dec'];
+const monthSelect = document.getElementById('monthSelect');
+monthNames.forEach((name, idx) => {
+  const opt = document.createElement('option');
+  opt.value = idx; opt.textContent = name;
+  monthSelect.appendChild(opt);
+});
+monthSelect.value = huMonthAbbr.indexOf(DATA.today_label.split('.')[0]);
+
+function monthOfIndex(dates, i) { return huMonthAbbr.indexOf(dates[i].split('.')[0]); }
+
+function expectedShift(weekLabel) {
+  const [y, mo, da] = weekLabel.split('.').map(Number);
+  const [ty, tmo, tda] = DATA.today_week_label.split('.').map(Number);
+  const days = Math.round((Date.UTC(y, mo - 1, da) - Date.UTC(ty, tmo - 1, tda)) / 86400000);
+  const offset = Math.round(days / 7);
+  const idx = ((offset % 3) + 3) % 3;
+  return ['Éjjel', 'Délután', 'Délelőtt'][idx];
+}
+function computeSummary(name, year) {
+  const yd = DATA.daily_by_year[year];
+  const counts = { SZ: 0, B: 0, OH: 0, UN: 0, P: 0 };
+  (yd.daily[name] || []).forEach(c => { if (counts[c] !== undefined) counts[c]++; });
+  return counts;
+}
+
+function renderDaily() {
+  const yearData = DATA.daily_by_year[currentYear];
+  if (!yearData) return;
+  const monthIdx = parseInt(monthSelect.value, 10);
+  const colIndexes = [];
+  yearData.dates.forEach((d, i) => { if (monthOfIndex(yearData.dates, i) === monthIdx) colIndexes.push(i); });
+  const isToday = (i) => currentYear === DATA.today_year && yearData.dates[i] === DATA.today_label;
+
+  let html = '<thead><tr><th class="name-col">Nap</th>';
+  colIndexes.forEach(i => { html += `<th class="${isToday(i) ? 'today-col' : ''}">${yearData.dates[i].split('.')[1]}</th>`; });
+  html += '</tr></thead><tbody><tr><td class="name-col">' + DATA.employee + '</td>';
+  colIndexes.forEach(i => {
+    const code = (yearData.daily[DATA.employee] && yearData.daily[DATA.employee][i]) || '';
+    const info = DATA.codes[code];
+    const bg = (info && code) ? `background:${info.color}${code==='B'?';color:white':''};` : '';
+    html += `<td class="${isToday(i) ? 'today-col' : ''}" style="${bg}" title="${info ? info.label : ''}">${code}</td>`;
+  });
+  html += '</tr></tbody>';
+  document.getElementById('dailyTable').innerHTML = html;
+}
+
+function renderWeekly() {
+  const colIndexes = [];
+  DATA.week_labels.forEach((w, i) => { if (DATA.week_years[i] === currentYear) colIndexes.push(i); });
+  let html = '<thead><tr><th class="name-col">Hét</th>';
+  colIndexes.forEach(i => {
+    const parts = DATA.week_labels[i].split('.');
+    const isToday = DATA.week_labels[i] === DATA.today_week_label;
+    html += `<th class="${isToday ? 'today-col' : ''}">${parts[1]}.${parts[2]}</th>`;
+  });
+  html += '</tr></thead><tbody><tr><td class="name-col">' + DATA.employee + '</td>';
+  const vals = DATA.weekly[DATA.employee] || [];
+  colIndexes.forEach(i => {
+    const v = vals[i] || '';
+    const color = DATA.shift_colors[v];
+    const isToday = DATA.week_labels[i] === DATA.today_week_label;
+    const style = color ? `background:${color}${v === 'Éjjel' ? ';color:white' : ''};` : '';
+    html += `<td class="${isToday ? 'today-col' : ''}" style="${style}">${v}</td>`;
+  });
+  html += '</tr></tbody>';
+  document.getElementById('weeklyTable').innerHTML = html;
+}
+
+function renderExceptions() {
+  const rows = [];
+  const vals = DATA.weekly[DATA.employee] || [];
+  DATA.week_labels.forEach((label, i) => {
+    if (DATA.week_years[i] !== currentYear) return;
+    const actual = vals[i] || '';
+    const exp = expectedShift(label);
+    if (actual && actual !== exp) rows.push({ week: label, expected: exp, actual });
+  });
+  let html = '<thead><tr><th>Hét</th><th>Elvárt (rotáció)</th><th>Tényleges</th></tr></thead><tbody>';
+  if (rows.length === 0) html += '<tr><td colspan="3" style="text-align:center;color:#6b7280;">Nincs kivétel ebben az évben.</td></tr>';
+  rows.forEach(e => {
+    const parts = e.week.split('.');
+    const color = DATA.shift_colors[e.actual];
+    const style = color ? `background:${color}${e.actual === 'Éjjel' ? ';color:white' : ''};` : '';
+    html += `<tr><td>${parts[1]}.${parts[2]}</td><td>${e.expected}</td><td style="${style}">${e.actual}</td></tr>`;
+  });
+  html += '</tbody>';
+  document.getElementById('excTable').innerHTML = html;
+}
+
+function renderSummary() {
+  const container = document.getElementById('summaryCards');
+  const labelMap = { SZ: 'Szabadság', B: 'Betegszabadság', OH: 'Home office', UN: 'Ünnepnap', P: 'Pihenőnap' };
+  const counts = computeSummary(DATA.employee, currentYear);
+  const keret = (DATA.quota[DATA.employee] && DATA.quota[DATA.employee][currentYear]) || 0;
+  const hatra = keret - counts.SZ;
+  let rowsHtml = '';
+  DATA.summary_codes.forEach(code => { rowsHtml += `<tr><td>${labelMap[code]}</td><td class="num">${counts[code]}</td></tr>`; });
+  container.innerHTML = `<div class="summary-card" style="flex-basis:280px;"><h3>${DATA.employee}</h3><table>${rowsHtml}</table>
+    <div class="quota-box"><span class="quota-caption">Keret: ${keret} nap</span>
+    <span class="quota-remaining">${hatra}<span class="quota-caption"> nap hátra</span></span></div></div>`;
+}
+
+function renderAll() { renderDaily(); renderWeekly(); renderExceptions(); renderSummary(); }
+monthSelect.addEventListener('change', renderDaily);
+renderAll();
+</script>
+</body>
+</html>
+"""
+
+os.makedirs(PEOPLE_DIR, exist_ok=True)
+for name in all_employees:
+    p_daily_by_year = {
+        y: {"dates": daily_by_year[y]["dates"], "daily": {name: daily_by_year[y]["daily"][name]}}
+        for y in years
+    }
+    p_data = {
+        "generated": data["generated"],
+        "years": years,
+        "employee": name,
+        "daily_by_year": p_daily_by_year,
+        "week_labels": week_labels,
+        "week_years": week_years,
+        "weekly": {name: weekly.get(name, [])},
+        "codes": DAILY_CODES,
+        "summary_codes": SUMMARY_CODES,
+        "shift_colors": SHIFT_COLORS,
+        "quota": {name: quota.get(name, {})},
+        "today_year": data["today_year"],
+        "today_label": data["today_label"],
+        "today_week_label": data["today_week_label"],
+        "today_display": data["today_display"],
+    }
+    p_html = (PERSONAL_TEMPLATE
+              .replace("__CSS_BLOCK__", CSS_BLOCK)
+              .replace("__NAME__", name)
+              .replace("__GENERATED__", p_data["generated"])
+              .replace("__TODAY_DISPLAY__", p_data["today_display"])
+              .replace("__DATA_JSON__", json.dumps(p_data, ensure_ascii=False)))
+    fname = os.path.join(PEOPLE_DIR, f"{slugify(name)}.html")
+    with open(fname, "w", encoding="utf-8") as f:
+        f.write(p_html)
+
+print(f"OK: {len(all_employees)} személyes oldal a '{PEOPLE_DIR}/' mappában (mindegyik csak a saját adatát tartalmazza)")
 print("OK:", OUT)
-print("Szerkesztői jelszó:", EDIT_PASSWORD)
