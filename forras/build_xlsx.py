@@ -18,8 +18,11 @@ from openpyxl.utils import get_column_letter
 
 YEARS = [2025, 2026, 2027, 2028]
 TODAY = datetime.date(2026, 7, 13)
-N_EMPLOYEES = 16
-EMPLOYEES = [f"Munkatárs {i:02d}" for i in range(1, N_EMPLOYEES + 1)]
+EMPLOYEES = [
+    "24009", "18639", "25856", "33501", "20161", "21319", "35883", "27556",
+    "33373", "21180", "35885", "90008327", "35884", "29739", "22166",
+]
+N_EMPLOYEES = len(EMPLOYEES)
 DEFAULT_MIN_STAFFING = 10
 DEFAULT_VACATION_QUOTA = 20  # törvényi alap szabadságkeret napokban, soronként felülírható
 

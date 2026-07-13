@@ -8,18 +8,21 @@ Szabadság / betegszabadság / heti munkarend nyilvántartó. Három szintű hoz
   **sehonnan nincs belinkelve** — csak azok tudják elérni, akiknek elküldöd a linket
   (`https://<felhasználóneved>.github.io/<repo>/admin.html`). Ezt te és a másik megbízott
   ember használja.
-- **`people/<nev>.html`** — 16 külön fájl, mindegyik **csak az adott dolgozó saját adatát**
-  tartalmazza (a saját neve sincs benne másokénak, a fájlban ténylegesen nincs más
-  szerepeltetve). Ezt a linket egyenként küldöd ki emailben mindenkinek a saját nevére.
+- **`people/<azonosító>.html`** — 15 külön fájl (a 15 dolgozói azonosító alapján:
+  24009, 18639, 25856, 33501, 20161, 21319, 35883, 27556, 33373, 21180, 35885, 90008327,
+  35884, 29739, 22166), mindegyik **csak az adott dolgozó saját adatát** tartalmazza (más
+  kollégája neve/azonosítója sincs benne, a fájlban ténylegesen nincs más szerepeltetve).
+  Ezt a linket egyenként küldöd ki emailben/más csatornán mindenkinek.
 
 Ez valódi adatminimalizálás (GDPR szempontból is jobb, mint egy közös fájl): egy dolgozó
 linkjében fizikailag nincs benne más kollégája szabadsága vagy betegsége — nem szűrésről van
-szó, a fájl tartalma is más.
+szó, a fájl tartalma is más. Azonosítószám használata a névhez képest plusz védelem: a link
+maga sem árulja el a nevet, ha véletlenül rossz kézbe kerülne.
 
-**Amíg placeholder nevek vannak** (`Munkatárs 01` stb.), a `people/` fájlnevek is ilyenek
-(pl. `munkatars-01.html`). Ha valódi neveket írsz be az xlsx-be és újragenerálod, a
-fájlnevek is a valós nevek alapján készülnek majd — ilyenkor a régi linkek érvénytelenné
-válnak, újra ki kell küldened őket.
+Ha az admin.html-en átnevezed valamelyik dolgozót (élő szerkesztés), az csak az admin.html-t
+frissíti — a `people/` fájlnevek/tartalmak nem követik automatikusan. Ha új azonosítóra
+váltasz, a `forras` mappa scriptjeivel kell újragenerálni a `people/` mappát is — ilyenkor a
+régi linkek érvénytelenné válnak, újra ki kell küldened őket.
 
 ## Feltöltés GitHub-ra (böngészőből, git nélkül)
 
@@ -80,7 +83,7 @@ régieket).
 
 - `index.html` — publikus, adatmentes főoldal
 - `admin.html` — teljes nézet (csak a megbízott adminoknak küldött link)
-- `people/*.html` — 16 személyes, adatminimalizált oldal (egyenként kiküldött linkek)
+- `people/*.html` — 15 személyes, adatminimalizált oldal (egyenként kiküldött linkek)
 - `forras/csapat_nyilvantartas.xlsx` — a kiinduló adatforrás (csak a teljes újraépítéshez kell)
 - `forras/generate_html.py` — script, ami az xlsx-ből legyártja mindhárom szintet
 - `forras/build_xlsx.py` — az xlsx sablon generátora (évek, ünnepnapok, műszakrotáció)
