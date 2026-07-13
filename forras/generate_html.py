@@ -31,10 +31,11 @@ DAILY_CODES = {
     "SZ":   {"label": "Vállalati szabadság", "color": "#f5a623"},
     "SZMV": {"label": "Saját szabadság", "color": "#f7c948"},
     "B":    {"label": "Betegszabadság", "color": "#ef5350"},
+    "KI":   {"label": "Kivétel", "color": "#7ba7d9"},
     "UN":   {"label": "Ünnepnap", "color": "#ab7fd1"},
     "P":    {"label": "Pihenőnap", "color": "#7cb872"},
 }
-SUMMARY_CODES = ["SZ", "SZMV", "B", "UN", "P"]
+SUMMARY_CODES = ["SZ", "SZMV", "B", "KI", "UN", "P"]
 SHIFT_CYCLE = ["Éjjel", "Délután", "Délelőtt"]
 SHIFT_COLORS = {
     "Éjjel": "#5b4b8a",
@@ -240,6 +241,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   }
   thead th { position: sticky; top: 0; background: #383e73; color: white; z-index: 3; font-weight: 600; font-size: 11px; }
   thead th.name-col { z-index: 4; background: #383e73; }
+  thead th .day-num { display: block; font-size: 11px; }
+  thead th .day-name { display: block; font-size: 8.5px; font-weight: 500; opacity: .7; margin-top: 1px; }
+  thead th.weekend-col { background: #4a5296; }
+  td.weekend-col { background: #f0f1f6; }
   tbody tr:nth-child(even) td:not(.name-col):not([style]) { background: #fafafc; }
   tbody tr:hover td:not(.name-col) { filter: brightness(0.96); }
   tbody tr:hover td.name-col { background: #f4f4fb; }
@@ -792,6 +797,14 @@ monthNames.forEach((name, idx) => {
 monthSelect.value = huMonthAbbr.indexOf(DATA.today_label.split('.')[0]);
 
 function monthOfIndex(dates, i) { return huMonthAbbr.indexOf(dates[i].split('.')[0]); }
+const weekdayLetters = ['H', 'K', 'Sze', 'Cs', 'P', 'Szo', 'V'];
+function weekdayLetterOf(dates, i, year) {
+  const [monAbbr, dayStr] = dates[i].split('.');
+  const month = huMonthAbbr.indexOf(monAbbr);
+  const d = new Date(Date.UTC(year, month, parseInt(dayStr, 10)));
+  const jsDay = d.getUTCDay(); // 0 = vasárnap
+  return weekdayLetters[(jsDay + 6) % 7];
+}
 function initials(name) {
   const parts = name.replace('Munkatárs ', '').trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return '?';
@@ -833,7 +846,7 @@ function computeStaffCounts(year) {
 }
 function computeSummary(name, year) {
   const yd = DATA.daily_by_year[year];
-  const counts = { SZ: 0, SZMV: 0, B: 0, UN: 0, P: 0 };
+  const counts = { SZ: 0, SZMV: 0, B: 0, KI: 0, UN: 0, P: 0 };
   const codes = (yd.daily[name] || []);
   codes.forEach(c => { if (counts[c] !== undefined) counts[c]++; });
   return counts;
@@ -873,9 +886,13 @@ function renderDaily() {
 
   document.getElementById('minStaffInput').value = yearData.min_staffing;
 
+  const weekdayOfCol = colIndexes.map(i => weekdayLetterOf(yearData.dates, i, currentYear));
+  const isWeekend = (idx) => weekdayOfCol[idx] === 'Szo' || weekdayOfCol[idx] === 'V';
+
   let html = '<thead><tr><th class="name-col">Munkatárs</th>';
-  colIndexes.forEach(i => {
-    html += `<th class="${isToday(i) ? 'today-col' : ''}">${yearData.dates[i].split('.')[1]}</th>`;
+  colIndexes.forEach((i, ci) => {
+    const weekendCls = isWeekend(ci) ? ' weekend-col' : '';
+    html += `<th class="${isToday(i) ? 'today-col' : ''}${weekendCls}"><span class="day-num">${yearData.dates[i].split('.')[1]}</span><span class="day-name">${weekdayOfCol[ci]}</span></th>`;
   });
   html += '</tr></thead><tbody>';
 
@@ -883,11 +900,11 @@ function renderDaily() {
     if (search && !name.toLowerCase().includes(search)) return;
     const nameCls = editMode ? 'name-col editable-name' : 'name-col';
     html += `<tr><td class="${nameCls}" data-name="${name}" title="${editMode ? 'Kattints az átnevezéshez' : ''}"><span class="avatar">${initials(name)}</span>${name}</td>`;
-    colIndexes.forEach(i => {
+    colIndexes.forEach((i, ci) => {
       const code = (yearData.daily[name] && yearData.daily[name][i]) || '';
       const info = DATA.codes[code];
       const bg = (info && code) ? `background:${info.color}${code==='B'?';color:white':''};` : '';
-      const cls = (isToday(i) ? 'today-col ' : '') + (editMode ? 'editable' : '');
+      const cls = (isToday(i) ? 'today-col ' : '') + (isWeekend(ci) && !code ? 'weekend-col ' : '') + (editMode ? 'editable' : '');
       html += `<td class="${cls}" data-emp="${name}" data-idx="${i}" style="${bg}" title="${info ? info.label : ''}">${code}</td>`;
     });
     html += '</tr>';
@@ -1041,7 +1058,7 @@ function renderExceptions() {
 function renderSummary() {
   const container = document.getElementById('summaryCards');
   container.innerHTML = '';
-  const labelMap = { SZ: 'Vállalati szabadság', SZMV: 'Saját szabadság', B: 'Betegszabadság', UN: 'Ünnepnap', P: 'Pihenőnap' };
+  const labelMap = { SZ: 'Vállalati szabadság', SZMV: 'Saját szabadság', B: 'Betegszabadság', KI: 'Kivétel', UN: 'Ünnepnap', P: 'Pihenőnap' };
   DATA.employees.forEach(name => {
     const counts = computeSummary(name, currentYear);
     const keret = (DATA.quota[name] && DATA.quota[name][currentYear]) || 0;
@@ -1307,32 +1324,6 @@ function startApp(realData) {
   initApp();
 }
 
-if (isEncrypted) {
-  document.getElementById('lockScreen').style.display = 'flex';
-  document.getElementById('lockForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const pwInput = document.getElementById('lockPasswordInput');
-    const errEl = document.getElementById('lockError');
-    errEl.textContent = '';
-    const submitBtn = e.target.querySelector('button');
-    submitBtn.disabled = true;
-    submitBtn.textContent = 'Ellenőrzés...';
-    try {
-      const decrypted = await decryptWithPassword_(RAW, pwInput.value);
-      startApp(decrypted);
-    } catch (err) {
-      errEl.textContent = 'Hibás jelszó. Próbáld újra.';
-      pwInput.value = '';
-      pwInput.focus();
-    } finally {
-      submitBtn.disabled = false;
-      submitBtn.textContent = 'Belépés';
-    }
-  });
-} else {
-  startApp(RAW);
-}
-
 function initApp() {
   currentYear = DATA.years.includes(DATA.today_year) ? DATA.today_year : DATA.years[0];
 
@@ -1379,6 +1370,14 @@ function initApp() {
 }
 
 function monthOfIndex(dates, i) { return huMonthAbbr.indexOf(dates[i].split('.')[0]); }
+const weekdayLetters = ['H', 'K', 'Sze', 'Cs', 'P', 'Szo', 'V'];
+function weekdayLetterOf(dates, i, year) {
+  const [monAbbr, dayStr] = dates[i].split('.');
+  const month = huMonthAbbr.indexOf(monAbbr);
+  const d = new Date(Date.UTC(year, month, parseInt(dayStr, 10)));
+  const jsDay = d.getUTCDay(); // 0 = vasárnap
+  return weekdayLetters[(jsDay + 6) % 7];
+}
 
 function expectedShift(weekLabel) {
   const [y, mo, da] = weekLabel.split('.').map(Number);
@@ -1390,7 +1389,7 @@ function expectedShift(weekLabel) {
 }
 function computeSummary(name, year) {
   const yd = DATA.daily_by_year[year];
-  const counts = { SZ: 0, SZMV: 0, B: 0, UN: 0, P: 0 };
+  const counts = { SZ: 0, SZMV: 0, B: 0, KI: 0, UN: 0, P: 0 };
   (yd.daily[name] || []).forEach(c => { if (counts[c] !== undefined) counts[c]++; });
   return counts;
 }
@@ -1403,14 +1402,21 @@ function renderDaily() {
   yearData.dates.forEach((d, i) => { if (monthOfIndex(yearData.dates, i) === monthIdx) colIndexes.push(i); });
   const isToday = (i) => currentYear === DATA.today_year && yearData.dates[i] === DATA.today_label;
 
+  const weekdayOfCol = colIndexes.map(i => weekdayLetterOf(yearData.dates, i, currentYear));
+  const isWeekend = (idx) => weekdayOfCol[idx] === 'Szo' || weekdayOfCol[idx] === 'V';
+
   let html = '<thead><tr><th class="name-col">Nap</th>';
-  colIndexes.forEach(i => { html += `<th class="${isToday(i) ? 'today-col' : ''}">${yearData.dates[i].split('.')[1]}</th>`; });
+  colIndexes.forEach((i, ci) => {
+    const weekendCls = isWeekend(ci) ? ' weekend-col' : '';
+    html += `<th class="${isToday(i) ? 'today-col' : ''}${weekendCls}"><span class="day-num">${yearData.dates[i].split('.')[1]}</span><span class="day-name">${weekdayOfCol[ci]}</span></th>`;
+  });
   html += '</tr></thead><tbody><tr><td class="name-col">' + DATA.employee + '</td>';
-  colIndexes.forEach(i => {
+  colIndexes.forEach((i, ci) => {
     const code = (yearData.daily[DATA.employee] && yearData.daily[DATA.employee][i]) || '';
     const info = DATA.codes[code];
     const bg = (info && code) ? `background:${info.color}${code==='B'?';color:white':''};` : '';
-    html += `<td class="${isToday(i) ? 'today-col' : ''}" style="${bg}" title="${info ? info.label : ''}">${code}</td>`;
+    const cls = (isToday(i) ? 'today-col ' : '') + (isWeekend(ci) && !code ? 'weekend-col' : '');
+    html += `<td class="${cls}" style="${bg}" title="${info ? info.label : ''}">${code}</td>`;
   });
   html += '</tr></tbody>';
   document.getElementById('dailyTable').innerHTML = html;
@@ -1472,7 +1478,7 @@ function renderExceptions() {
 
 function renderSummary() {
   const container = document.getElementById('summaryCards');
-  const labelMap = { SZ: 'Vállalati szabadság', SZMV: 'Saját szabadság', B: 'Betegszabadság', UN: 'Ünnepnap', P: 'Pihenőnap' };
+  const labelMap = { SZ: 'Vállalati szabadság', SZMV: 'Saját szabadság', B: 'Betegszabadság', KI: 'Kivétel', UN: 'Ünnepnap', P: 'Pihenőnap' };
   const counts = computeSummary(DATA.employee, currentYear);
   const keret = (DATA.quota[DATA.employee] && DATA.quota[DATA.employee][currentYear]) || 0;
   const hatra = keret - counts.SZ - counts.SZMV;
@@ -1484,6 +1490,35 @@ function renderSummary() {
 }
 
 function renderAll() { renderDaily(); renderWeekly(); renderExceptions(); renderSummary(); }
+
+// A tényleges indítást csak itt, a script legvégén hívjuk meg — ekkorra már minden
+// később definiált function/const (pl. weekdayLetters, renderAll) elérhető, elkerülve
+// a "Cannot access ... before initialization" hibát.
+if (isEncrypted) {
+  document.getElementById('lockScreen').style.display = 'flex';
+  document.getElementById('lockForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const pwInput = document.getElementById('lockPasswordInput');
+    const errEl = document.getElementById('lockError');
+    errEl.textContent = '';
+    const submitBtn = e.target.querySelector('button');
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Ellenőrzés...';
+    try {
+      const decrypted = await decryptWithPassword_(RAW, pwInput.value);
+      startApp(decrypted);
+    } catch (err) {
+      errEl.textContent = 'Hibás jelszó. Próbáld újra.';
+      pwInput.value = '';
+      pwInput.focus();
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Belépés';
+    }
+  });
+} else {
+  startApp(RAW);
+}
 </script>
 </body>
 </html>

@@ -68,10 +68,11 @@ DAILY_CODES = {
     "SZ":   ("Vállalati szabadság", "FFC000"),
     "SZMV": ("Saját szabadság", "FFD966"),
     "B":    ("Betegszabadság", "FF6B6B"),
+    "KI":   ("Kivétel", "BDD7EE"),
     "UN":   ("Ünnepnap", "C39BD3"),
     "P":    ("Pihenőnap", "A9D18E"),
 }
-SUMMARY_CODES = [("SZ", "Vállalati szabadság"), ("SZMV", "Saját szabadság"), ("B", "Betegszabadság"), ("UN", "Ünnepnap"), ("P", "Pihenőnap")]
+SUMMARY_CODES = [("SZ", "Vállalati szabadság"), ("SZMV", "Saját szabadság"), ("B", "Betegszabadság"), ("KI", "Kivétel"), ("UN", "Ünnepnap"), ("P", "Pihenőnap")]
 
 # Váltott műszakrend: 3 hetes rotáció, az egész csapatra egyszerre érvényes.
 # A TODAY-t tartalmazó hét = Éjjel, utána Délután, utána Délelőtt, majd újra Éjjel...
@@ -183,7 +184,7 @@ for YEAR in YEARS:
         ws.cell(row=r, column=1, value=name).font = Font(name=FONT_NAME, size=10)
 
     data_range = f"B2:{get_column_letter(n_days + 1)}{N_EMPLOYEES + 1}"
-    dv = DataValidation(type="list", formula1='"" ,SZ,SZMV,B,UN,P', allow_blank=True)
+    dv = DataValidation(type="list", formula1='"" ,SZ,SZMV,B,KI,UN,P', allow_blank=True)
     ws.add_data_validation(dv)
     dv.add(data_range)
 

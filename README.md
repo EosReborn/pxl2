@@ -96,8 +96,14 @@ Saját szabadság, Pihenő, Egyéb), hányszor tért el valaki az automatikus ro
 évben, plusz egy végösszeg sort is.
 
 **Napi kódok:** `SZ` = vállalati szabadság, `SZMV` = saját szabadság, `B` = betegszabadság,
-`UN` = ünnepnap, `P` = pihenőnap. A két szabadságtípus (SZ + SZMV) együtt terheli ugyanazt az
-éves "Szabadságkeretet" — a "Hátralévő szabadság" mindkettőt levonja belőle.
+`KI` = kivétel, `UN` = ünnepnap, `P` = pihenőnap. A két szabadságtípus (SZ + SZMV) együtt
+terheli ugyanazt az éves "Szabadságkeretet" — a "Hátralévő szabadság" mindkettőt levonja
+belőle. A `KI` kód (és a többi: B, UN, P) csak számolódik az éves összesítőben, de nem
+csökkenti a szabadságkeretet.
+
+A "Napi jelenlét" táblázat oszlopfejlécében a nap sorszáma alatt a hét napja is látszik
+rövidítve (H, K, Sze, Cs, P, Szo, V), a szombat/vasárnap oszlopok pedig halványabb
+háttérrel vannak kiemelve.
 
 ## Ritkán használt: teljes újraépítés Excelből (ez frissíti a people/ mappát is)
 
